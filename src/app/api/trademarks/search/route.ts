@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import axios, { AxiosError } from "axios";
+import axios, { AxiosError, AxiosInstance } from "axios";
+import { cookies } from "next/headers";
+import { wrapper } from 'axios-cookiejar-support';
+import tough from 'tough-cookie';
+import { Cookie } from 'tough-cookie';
 
 const INPI_API_BASE_URL = "https://api-gateway.inpi.fr";
 const INPI_AUTH_URL = `${INPI_API_BASE_URL}/services/uaa/api/authenticate`;
@@ -10,6 +14,20 @@ const INPI_SEARCH_URL = `${INPI_API_BASE_URL}/services/apidiffusion/api/marques/
 let accessToken: string | null = null;
 let xsrfToken: string | null = null;
 let tokenExpiry: number | null = null;
+
+// Create axios instance with cookie jar support
+const cookieJar = new tough.CookieJar();
+const client: AxiosInstance = wrapper(axios.create({ 
+  jar: cookieJar, 
+  withCredentials: true,
+  headers: {
+    'Accept': 'application/json',
+    'Content-Type': 'application/json',
+    'User-Agent': 'Next.js/14.0.0',
+    'Origin': 'https://data.inpi.fr',
+    'Referer': 'https://data.inpi.fr/'
+  }
+}));
 
 // Custom error class for API errors
 class APIError extends Error {
@@ -52,48 +70,38 @@ async function getAccessToken() {
   try {
     console.log("Requesting new access token...");
 
-    // Step 1: Initial authentication with Basic Auth
-    const authResponse = await axios.post(
-      INPI_AUTH_URL,
-      {},
-      {
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          Authorization: `Basic ${Buffer.from("galaparicheva@oolith.eu:Waters36023702??").toString("base64")}`,
-        },
-        withCredentials: true,
-      }
-    );
-
-    // Extract XSRF token from response headers
-    const xsrfTokenHeader = authResponse.headers["x-csrf-token"];
-    if (!xsrfTokenHeader) {
+    // Step 1: Initial authentication to get XSRF token
+    const authResponse = await client.get(INPI_AUTH_URL);
+    
+    // Get cookies from jar
+    const cookies = cookieJar.getCookiesSync(INPI_AUTH_URL);
+    const xsrfCookie = cookies.find((c: Cookie) => c.key === 'XSRF-TOKEN');
+    
+    if (!xsrfCookie?.value) {
       throw new APIError(
         "Failed to obtain CSRF token",
         500,
-        { headers: authResponse.headers }
+        { cookies: cookies.map((c: Cookie) => `${c.key}=${c.value}`) }
       );
     }
 
-    xsrfToken = xsrfTokenHeader;
+    xsrfToken = decodeURIComponent(xsrfCookie.value);
     console.log("Extracted XSRF token:", xsrfToken);
 
-    // Step 2: Get OAuth token
-    const tokenResponse = await axios.post(
+    // Step 2: Get OAuth token using the XSRF token
+    const tokenResponse = await client.post(
       INPI_TOKEN_URL,
       new URLSearchParams({
-        grant_type: "client_credentials",
+        grant_type: "password", // Changed from client_credentials to password
+        username: "galaparicheva@oolith.eu",
+        password: "Waters36023702??",
         scope: "openid profile email marques",
       }).toString(),
       {
         headers: {
-          Accept: "application/json",
           "Content-Type": "application/x-www-form-urlencoded",
           "X-XSRF-TOKEN": xsrfToken,
-          Authorization: `Basic ${Buffer.from("galaparicheva@oolith.eu:Waters36023702??").toString("base64")}`,
-        },
-        withCredentials: true,
+        }
       }
     );
 
