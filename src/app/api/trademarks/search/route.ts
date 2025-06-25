@@ -61,6 +61,15 @@ function logError(context: string, error: any) {
 }
 
 async function getAccessToken() {
+  if (!process.env.INPI_USERNAME || !process.env.INPI_PASSWORD) {
+    console.error("INPI_USERNAME or INPI_PASSWORD environment variables are not set.");
+    throw new APIError(
+      "Authentication configuration error: Missing credentials.",
+      500,
+      { reason: "INPI_USERNAME or INPI_PASSWORD environment variables are not set." }
+    );
+  }
+
   // Return cached token if it's still valid (with 5-minute buffer)
   if (accessToken && tokenExpiry && Date.now() < tokenExpiry - 5 * 60 * 1000) {
     console.log("Using cached access token");
@@ -93,8 +102,8 @@ async function getAccessToken() {
       INPI_TOKEN_URL,
       new URLSearchParams({
         grant_type: "password", // Changed from client_credentials to password
-        username: "galaparicheva@oolith.eu",
-        password: "Waters36023702??",
+        username: process.env.INPI_USERNAME!,
+        password: process.env.INPI_PASSWORD!,
         scope: "openid profile email marques",
       }).toString(),
       {
@@ -255,7 +264,7 @@ export async function GET(request: Request) {
                   Authorization: `Bearer ${newToken}`,
                   "Content-Type": "application/json",
                   Accept: "application/json",
-                  "X-XSRF-TOKEN": xsrfToken || "",
+                  "X-XSRF-TOKEN": xsrfToken || "", // Ensure xsrfToken is current if getAccessToken refreshed it
                 },
                 withCredentials: true,
               }
@@ -264,12 +273,34 @@ export async function GET(request: Request) {
             return NextResponse.json(retryResponse.data);
           } catch (retryError: unknown) {
             logError("searchRetry", retryError);
+            let retryStatus = 500;
+            let retryDetails: any = { message: retryError instanceof Error ? retryError.message : String(retryError) };
+            let retryResponseMessage = "Failed to retry search after token refresh";
+
+            if (retryError instanceof APIError) {
+                retryStatus = retryError.statusCode;
+                retryDetails = retryError.details || retryDetails;
+                retryResponseMessage = `Failed to retry search: ${retryError.message}`;
+            } else if (axios.isAxiosError(retryError)) {
+                retryStatus = retryError.response?.status || 500;
+                retryDetails = retryError.response?.data || retryDetails;
+                retryResponseMessage = `Failed to retry search: ${retryError.message}`;
+            }
+
             throw new APIError(
-              "Failed to retry search after token refresh",
-              500,
+              retryResponseMessage,
+              retryStatus,
               { 
-                originalError: error instanceof Error ? error.message : String(error),
-                retryError: retryError instanceof Error ? retryError.message : String(retryError)
+                originalError: {
+                    message: error.message,
+                    status: error.response?.status,
+                    data: error.response?.data
+                },
+                retryError: {
+                    message: retryError instanceof Error ? retryError.message : String(retryError),
+                    status: retryStatus, // This is the status of the retry attempt error
+                    data: retryDetails
+                }
               }
             );
           }
