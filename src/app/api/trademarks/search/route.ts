@@ -79,11 +79,22 @@ async function getAccessToken() {
   try {
     console.log("Requesting new access token...");
 
-    // Step 1: Initial authentication to get XSRF token
-    const authResponse = await client.get(INPI_AUTH_URL);
+    // Step 1: Make a preliminary request to establish session and hopefully get XSRF token.
+    // Previously, this was INPI_AUTH_URL, but it seems to require authentication itself.
+    // Trying INPI_TOKEN_URL with a GET request as it's the endpoint for the subsequent POST.
+    // Alternatively, INPI_API_BASE_URL or a specific /login or /csrf endpoint might be needed.
+    console.log(`Attempting initial GET to ${INPI_TOKEN_URL} to obtain session/XSRF token.`);
+    try {
+      await client.get(INPI_TOKEN_URL);
+    } catch (error) {
+      // Log this error but proceed, as the main goal is to get cookies set by this attempt,
+      // even if the GET request itself doesn't return 200 (e.g., might return 405 Method Not Allowed,
+      // but could still set cookies).
+      logError("preliminaryGetToTokenUrl", error);
+    }
     
-    // Get cookies from jar
-    const cookies = cookieJar.getCookiesSync(INPI_AUTH_URL);
+    // Get cookies from jar - use INPI_TOKEN_URL as the domain for cookie retrieval
+    const cookies = cookieJar.getCookiesSync(INPI_TOKEN_URL);
     const xsrfCookie = cookies.find((c: Cookie) => c.key === 'XSRF-TOKEN');
     
     if (!xsrfCookie?.value) {
