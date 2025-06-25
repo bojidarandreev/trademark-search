@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import axios, { AxiosError, AxiosInstance } from "axios";
 import { cookies } from "next/headers";
-import { wrapper } from 'axios-cookiejar-support';
-import tough from 'tough-cookie';
-import { Cookie } from 'tough-cookie';
+import { wrapper } from "axios-cookiejar-support";
+import tough from "tough-cookie";
+import { Cookie } from "tough-cookie";
 
 const INPI_API_BASE_URL = "https://api-gateway.inpi.fr";
 const INPI_AUTH_URL = `${INPI_API_BASE_URL}/services/uaa/api/authenticate`;
@@ -17,17 +17,19 @@ let tokenExpiry: number | null = null;
 
 // Create axios instance with cookie jar support
 const cookieJar = new tough.CookieJar();
-const client: AxiosInstance = wrapper(axios.create({ 
-  jar: cookieJar, 
-  withCredentials: true,
-  headers: {
-    'Accept': 'application/json',
-    'Content-Type': 'application/json',
-    'User-Agent': 'Next.js/14.0.0',
-    'Origin': 'https://data.inpi.fr',
-    'Referer': 'https://data.inpi.fr/'
-  }
-}));
+const client: AxiosInstance = wrapper(
+  axios.create({
+    jar: cookieJar,
+    withCredentials: true,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "User-Agent": "Next.js/14.0.0",
+      Origin: "https://data.inpi.fr",
+      Referer: "https://data.inpi.fr/",
+    },
+  })
+);
 
 // Custom error class for API errors
 class APIError extends Error {
@@ -38,7 +40,7 @@ class APIError extends Error {
     public headers?: any
   ) {
     super(message);
-    this.name = 'APIError';
+    this.name = "APIError";
   }
 }
 
@@ -61,6 +63,20 @@ function logError(context: string, error: any) {
 }
 
 async function getAccessToken() {
+  if (!process.env.INPI_USERNAME || !process.env.INPI_PASSWORD) {
+    console.error(
+      "INPI_USERNAME or INPI_PASSWORD environment variables are not set."
+    );
+    throw new APIError(
+      "Authentication configuration error: Missing credentials.",
+      500,
+      {
+        reason:
+          "INPI_USERNAME or INPI_PASSWORD environment variables are not set.",
+      }
+    );
+  }
+
   // Return cached token if it's still valid (with 5-minute buffer)
   if (accessToken && tokenExpiry && Date.now() < tokenExpiry - 5 * 60 * 1000) {
     console.log("Using cached access token");
@@ -72,17 +88,15 @@ async function getAccessToken() {
 
     // Step 1: Initial authentication to get XSRF token
     const authResponse = await client.get(INPI_AUTH_URL);
-    
+
     // Get cookies from jar
     const cookies = cookieJar.getCookiesSync(INPI_AUTH_URL);
-    const xsrfCookie = cookies.find((c: Cookie) => c.key === 'XSRF-TOKEN');
-    
+    const xsrfCookie = cookies.find((c: Cookie) => c.key === "XSRF-TOKEN");
+
     if (!xsrfCookie?.value) {
-      throw new APIError(
-        "Failed to obtain CSRF token",
-        500,
-        { cookies: cookies.map((c: Cookie) => `${c.key}=${c.value}`) }
-      );
+      throw new APIError("Failed to obtain CSRF token", 500, {
+        cookies: cookies.map((c: Cookie) => `${c.key}=${c.value}`),
+      });
     }
 
     xsrfToken = decodeURIComponent(xsrfCookie.value);
@@ -93,26 +107,24 @@ async function getAccessToken() {
       INPI_TOKEN_URL,
       new URLSearchParams({
         grant_type: "password", // Changed from client_credentials to password
-        username: "galaparicheva@oolith.eu",
-        password: "Waters36023702??",
+        username: process.env.INPI_USERNAME!,
+        password: process.env.INPI_PASSWORD!,
         scope: "openid profile email marques",
       }).toString(),
       {
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
           "X-XSRF-TOKEN": xsrfToken,
-        }
+        },
       }
     );
 
     console.log("Token response:", tokenResponse.data);
 
     if (!tokenResponse.data.access_token) {
-      throw new APIError(
-        "No access token in response",
-        500,
-        { response: tokenResponse.data }
-      );
+      throw new APIError("No access token in response", 500, {
+        response: tokenResponse.data,
+      });
     }
 
     accessToken = tokenResponse.data.access_token;
@@ -122,7 +134,7 @@ async function getAccessToken() {
     return accessToken;
   } catch (error: unknown) {
     logError("getAccessToken", error);
-    
+
     // Clear cached tokens on error
     accessToken = null;
     xsrfToken = null;
@@ -135,7 +147,7 @@ async function getAccessToken() {
     if (axios.isAxiosError(error)) {
       const status = error.response?.status;
       const message = error.response?.data?.error_description || error.message;
-      
+
       if (status === 401) {
         throw new APIError(
           "Authentication failed: Invalid credentials",
@@ -151,7 +163,7 @@ async function getAccessToken() {
           error.response?.headers
         );
       }
-      
+
       throw new APIError(
         `Authentication failed: ${message}`,
         status || 500,
@@ -160,11 +172,9 @@ async function getAccessToken() {
       );
     }
 
-    throw new APIError(
-      "Unexpected error during authentication",
-      500,
-      { error: error instanceof Error ? error.message : String(error) }
-    );
+    throw new APIError("Unexpected error during authentication", 500, {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -179,9 +189,9 @@ export async function GET(request: Request) {
 
     if (!query) {
       return NextResponse.json(
-        { 
+        {
           error: "Search query is required",
-          code: "MISSING_QUERY"
+          code: "MISSING_QUERY",
         },
         { status: 400 }
       );
@@ -226,17 +236,17 @@ export async function GET(request: Request) {
 
       if (axios.isAxiosError(error)) {
         const status = error.response?.status;
-        
+
         // Handle token invalidation
         if (status === 401 || status === 403) {
           console.log("Token invalid, clearing cache and retrying...");
           accessToken = null;
           xsrfToken = null;
           tokenExpiry = null;
-          
+
           try {
             const newToken = await getAccessToken();
-            
+
             // Retry the search with new token
             const retryResponse = await axios.post(
               INPI_SEARCH_URL,
@@ -255,7 +265,7 @@ export async function GET(request: Request) {
                   Authorization: `Bearer ${newToken}`,
                   "Content-Type": "application/json",
                   Accept: "application/json",
-                  "X-XSRF-TOKEN": xsrfToken || "",
+                  "X-XSRF-TOKEN": xsrfToken || "", // Ensure xsrfToken is current if getAccessToken refreshed it
                 },
                 withCredentials: true,
               }
@@ -264,19 +274,47 @@ export async function GET(request: Request) {
             return NextResponse.json(retryResponse.data);
           } catch (retryError: unknown) {
             logError("searchRetry", retryError);
-            throw new APIError(
-              "Failed to retry search after token refresh",
-              500,
-              { 
-                originalError: error instanceof Error ? error.message : String(error),
-                retryError: retryError instanceof Error ? retryError.message : String(retryError)
-              }
-            );
+            let retryStatus = 500;
+            let retryDetails: any = {
+              message:
+                retryError instanceof Error
+                  ? retryError.message
+                  : String(retryError),
+            };
+            let retryResponseMessage =
+              "Failed to retry search after token refresh";
+
+            if (retryError instanceof APIError) {
+              retryStatus = retryError.statusCode;
+              retryDetails = retryError.details || retryDetails;
+              retryResponseMessage = `Failed to retry search: ${retryError.message}`;
+            } else if (axios.isAxiosError(retryError)) {
+              retryStatus = retryError.response?.status || 500;
+              retryDetails = retryError.response?.data || retryDetails;
+              retryResponseMessage = `Failed to retry search: ${retryError.message}`;
+            }
+
+            throw new APIError(retryResponseMessage, retryStatus, {
+              originalError: {
+                message: error.message,
+                status: error.response?.status,
+                data: error.response?.data,
+              },
+              retryError: {
+                message:
+                  retryError instanceof Error
+                    ? retryError.message
+                    : String(retryError),
+                status: retryStatus, // This is the status of the retry attempt error
+                data: retryDetails,
+              },
+            });
           }
         }
 
         // Handle other API errors
-        const message = error.response?.data?.error_description || error.message;
+        const message =
+          error.response?.data?.error_description || error.message;
         throw new APIError(
           `Search failed: ${message}`,
           status || 500,
@@ -285,11 +323,9 @@ export async function GET(request: Request) {
         );
       }
 
-      throw new APIError(
-        "Unexpected error during search",
-        500,
-        { error: error instanceof Error ? error.message : String(error) }
-      );
+      throw new APIError("Unexpected error during search", 500, {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   } catch (error: unknown) {
     logError("searchRoute", error);
@@ -298,8 +334,12 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           error: error.message,
-          code: error.statusCode === 401 ? "UNAUTHORIZED" : 
-                error.statusCode === 403 ? "FORBIDDEN" : "INTERNAL_ERROR",
+          code:
+            error.statusCode === 401
+              ? "UNAUTHORIZED"
+              : error.statusCode === 403
+              ? "FORBIDDEN"
+              : "INTERNAL_ERROR",
           details: error.details,
           timestamp: new Date().toISOString(),
         },
