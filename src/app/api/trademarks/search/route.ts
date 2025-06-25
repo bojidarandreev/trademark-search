@@ -115,6 +115,29 @@ async function getAccessToken() {
     xsrfToken = decodeURIComponent(xsrfCookie.value);
     console.log("Extracted XSRF token:", xsrfToken);
 
+    // Intermediate Step: Call INPI_AUTH_URL with the obtained XSRF token
+    // This is to see if it "primes" or "validates" the session.
+    console.log(
+      `Attempting intermediate GET to ${INPI_AUTH_URL} with XSRF token.`
+    );
+    try {
+      const authResponse = await client.get(INPI_AUTH_URL, {
+        headers: {
+          "X-XSRF-TOKEN": xsrfToken,
+          // Other headers like Accept, User-Agent, Origin, Referer are part of client defaults
+        },
+      });
+      console.log(
+        "Intermediate GET to INPI_AUTH_URL successful:",
+        authResponse.status,
+        authResponse.data
+      );
+    } catch (error) {
+      // Log this error but proceed, as the main goal is to see if this step influences the final POST.
+      logError("intermediateGetToAuthUrl", error);
+      // We might still want to try the POST to INPI_TOKEN_URL unless this error is definitively fatal.
+    }
+
     // Step 2: Get OAuth token using the XSRF token
     const tokenResponse = await client.post(
       INPI_TOKEN_URL,
