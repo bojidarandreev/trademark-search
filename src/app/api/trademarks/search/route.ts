@@ -220,7 +220,7 @@ async function performSearch(
     );
   }
 
-  xsrfTokenValue = currentSearchXsrfToken; // Update global xsrfTokenValue with the one to be used for search
+  xsrfTokenValue = currentSearchXsrfToken;
   console.log(`Using X-XSRF-TOKEN for search: ${xsrfTokenValue || "None"}`);
   return client.post(INPI_SEARCH_URL, searchPayload, {
     headers: {
@@ -240,9 +240,8 @@ export async function GET(request: Request) {
     const pageFromUser = searchParams.get("page") || "1";
     const nbResultsPerPageFromUser =
       searchParams.get("nbResultsPerPage") || "20";
-    // Sort and order are temporarily unused for payload simplification
-    // const sortFromUser = searchParams.get("sort") || "relevance";
-    // const orderFromUser = searchParams.get("order") || "asc";
+    // const sortFromUser = searchParams.get("sort") || "relevance"; // Temporarily unused
+    // const orderFromUser = searchParams.get("order") || "asc";     // Temporarily unused
 
     if (!queryFromUser) {
       return NextResponse.json(
@@ -258,18 +257,30 @@ export async function GET(request: Request) {
     const parsedPage = parseInt(pageFromUser);
     const parsedNbResultsPerPage = parseInt(nbResultsPerPageFromUser);
 
-    // Simplified search payload - Attempt 1
+    // Step 2a: Restore full fields list
     const searchPayload = {
-      query: `[Mark=${queryFromUser}]`, // Sticking to Swagger example structure for query
+      query: `[Mark=${queryFromUser}]`,
       position: (parsedPage - 1) * parsedNbResultsPerPage,
       size: parsedNbResultsPerPage,
-      // sortList: [`${sortFromUser} ${orderFromUser}`], // Removed for simplification
-      collections: ["FR"], // Simplified
-      fields: ["ApplicationNumber", "Mark"], // Simplified
-      // withFacets: false, // Omitted
+      collections: ["FR"], // Still simplified
+      fields: [
+        // Restored full list
+        "ApplicationNumber",
+        "Mark",
+        "MarkCurrentStatusCode",
+        "DEPOSANT",
+        "AGENT_NAME",
+        "ukey",
+        "PublicationDate",
+        "RegistrationDate",
+        "ExpiryDate",
+        "NiceClassDetails",
+        "MarkImageFilename",
+      ],
+      // sortList still omitted
     };
     console.log(
-      "Constructed (simplified) search payload:",
+      "Constructed search payload (full fields):",
       JSON.stringify(searchPayload, null, 2)
     );
 
@@ -291,13 +302,9 @@ export async function GET(request: Request) {
         tokenExpiry = null;
         try {
           const newToken = await getAccessToken();
-          // Re-construct simplified payload for retry
+          // Re-construct payload for retry with full fields
           const retrySearchPayload = {
-            query: `[Mark=${queryFromUser}]`,
-            position: (parsedPage - 1) * parsedNbResultsPerPage,
-            size: parsedNbResultsPerPage,
-            collections: ["FR"],
-            fields: ["ApplicationNumber", "Mark"],
+            ...searchPayload, // Use the same payload structure as the initial attempt
           };
           const retryResponse = await performSearch(
             newToken,
