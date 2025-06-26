@@ -159,13 +159,13 @@ export async function GET(request: Request) {
     const parsedPage = parseInt(pageFromUser);
     const parsedNbResultsPerPage = parseInt(nbResultsPerPageFromUser);
 
-    // Step 2a: Restore full fields list
+    // Step 2b: Restore full collections list
     const searchPayload = {
       query: `[Mark=${queryFromUser}]`,
       position: (parsedPage - 1) * parsedNbResultsPerPage,
       size: parsedNbResultsPerPage,
-      collections: ["FR"], // Still simplified
-      fields: [ // Restored full list
+      collections: ["FR", "EU", "WO"], // Restored full list
+      fields: [ // Full list from previous successful step
         "ApplicationNumber", "Mark", "MarkCurrentStatusCode",
         "DEPOSANT", "AGENT_NAME", "ukey",
         "PublicationDate", "RegistrationDate", "ExpiryDate",
@@ -173,7 +173,7 @@ export async function GET(request: Request) {
       ],
       // sortList still omitted
     };
-    console.log("Constructed search payload (full fields):", JSON.stringify(searchPayload, null, 2));
+    console.log("Constructed search payload (full fields, full collections):", JSON.stringify(searchPayload, null, 2));
 
     try {
       const response = await performSearch(token, searchPayload);
@@ -187,7 +187,7 @@ export async function GET(request: Request) {
         accessToken = null; xsrfTokenValue = null; tokenExpiry = null;
         try {
           const newToken = await getAccessToken();
-          // Re-construct payload for retry with full fields
+          // Re-construct payload for retry
           const retrySearchPayload = {
             ...searchPayload // Use the same payload structure as the initial attempt
           };
