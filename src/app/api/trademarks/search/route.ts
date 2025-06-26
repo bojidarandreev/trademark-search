@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import axios, { AxiosError, AxiosInstance } from "axios";
-// import { cookies } from "next/headers"; // Not used directly for client-side calls by server
 import { wrapper } from 'axios-cookiejar-support';
 import tough from 'tough-cookie';
 import { Cookie } from 'tough-cookie';
@@ -9,27 +8,21 @@ const INPI_API_BASE_URL = "https://api-gateway.inpi.fr";
 const INPI_COOKIE_SETUP_URL = `${INPI_API_BASE_URL}/login`;
 const INPI_JSON_LOGIN_URL = `${INPI_API_BASE_URL}/auth/login`;
 const INPI_SEARCH_URL = `${INPI_API_BASE_URL}/services/apidiffusion/api/marques/search`;
+const INPI_MARQUES_METADATA_URL = `${INPI_API_BASE_URL}/services/apidiffusion/api/marques/metadata`;
 
 let accessToken: string | null = null;
-let xsrfTokenValue: string | null = null;
+let xsrfTokenValue: string | null = null; // Stores the most recently obtained XSRF token string value
 let tokenExpiry: number | null = null;
 
 const cookieJar = new tough.CookieJar();
 const client: AxiosInstance = wrapper(axios.create({ 
   jar: cookieJar, 
   withCredentials: true,
-  headers: {
-    'Accept': 'application/json, text/plain, */*',
-  }
+  headers: { 'Accept': 'application/json, text/plain, */*' }
 }));
 
 class APIError extends Error {
-  constructor(
-    message: string,
-    public statusCode: number,
-    public details?: any,
-    public responseHeaders?: any
-  ) {
+  constructor(message: string, public statusCode: number, public details?: any, public responseHeaders?: any) {
     super(message);
     this.name = 'APIError';
   }
@@ -42,11 +35,7 @@ function logError(context: string, error: any) {
     errorDetails.statusText = error.response?.statusText;
     errorDetails.data = error.response?.data;
     errorDetails.responseHeaders = error.response?.headers;
-    errorDetails.config = {
-      url: error.config?.url,
-      method: error.config?.method,
-      requestHeaders: error.config?.headers,
-    };
+    errorDetails.config = { url: error.config?.url, method: error.config?.method, requestHeaders: error.config?.headers };
   } else if (error instanceof APIError) {
     errorDetails.statusCode = error.statusCode;
     errorDetails.details = error.details;
@@ -59,49 +48,39 @@ function logError(context: string, error: any) {
 
 async function getAccessToken(): Promise<string> {
   if (!process.env.INPI_USERNAME || !process.env.INPI_PASSWORD) {
-    console.error("INPI_USERNAME or INPI_PASSWORD environment variables are not set.");
     throw new APIError("Authentication configuration error: Missing credentials.", 500, { reason: "INPI_USERNAME or INPI_PASSWORD environment variables are not set." });
   }
-
   if (accessToken && tokenExpiry && Date.now() < tokenExpiry - 5 * 60 * 1000) {
-    console.log("Using cached access token and XSRF token value");
+    console.log("Using cached access token.");
     return accessToken;
   }
-
   accessToken = null; xsrfTokenValue = null; tokenExpiry = null;
   console.log("Requesting new access token via /auth/login flow...");
   const browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-
   try {
     console.log(`Attempting initial GET to ${INPI_COOKIE_SETUP_URL} to obtain session cookies.`);
     try {
-      await client.get(INPI_COOKIE_SETUP_URL, {
-        headers: { 'User-Agent': browserUserAgent, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' }
-      });
+      await client.get(INPI_COOKIE_SETUP_URL, { headers: { 'User-Agent': browserUserAgent, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' }});
       console.log(`Initial GET to ${INPI_COOKIE_SETUP_URL} completed.`);
-    } catch (error) {
-      logError("initialGetToCookieSetupUrl", error);
-    }
+    } catch (error) { logError("initialGetToCookieSetupUrl", error); }
 
     const cookiesFromJar = await cookieJar.getCookies(INPI_COOKIE_SETUP_URL);
     const xsrfCookie = cookiesFromJar.find((c: Cookie) => c.key === 'XSRF-TOKEN');
-    
     if (!xsrfCookie?.value) {
       const currentCookiesDesc = cookiesFromJar.map(c => `${c.key}=${c.value}; Path=${c.path}; Domain=${c.domain}`).join('; ') || "None";
       console.error(`Cookies found for ${INPI_COOKIE_SETUP_URL} after GET: ${currentCookiesDesc}`);
-      throw new APIError(`Failed to obtain XSRF-TOKEN cookie after GET to ${INPI_COOKIE_SETUP_URL}.`, 500, { stage: "xsrf-cookie-extraction", retrievedCookiesCount: cookiesFromJar.length });
+      throw new APIError(`Failed to obtain XSRF-TOKEN cookie after GET to ${INPI_COOKIE_SETUP_URL}.`, 500, { stage: "login-xsrf-cookie-extraction" });
     }
-    xsrfTokenValue = decodeURIComponent(xsrfCookie.value);
-    console.log("Extracted XSRF-TOKEN cookie value:", xsrfTokenValue);
+    const loginXsrfToken = decodeURIComponent(xsrfCookie.value);
+    console.log("Extracted XSRF-TOKEN cookie value for login:", loginXsrfToken);
+    xsrfTokenValue = loginXsrfToken; // Set the global for now, might be overwritten by search-specific one
 
     console.log(`Attempting POST to ${INPI_JSON_LOGIN_URL} with JSON payload and XSRF token.`);
-    const loginResponse = await client.post(
-      INPI_JSON_LOGIN_URL,
+    const loginResponse = await client.post(INPI_JSON_LOGIN_URL,
       { username: process.env.INPI_USERNAME!, password: process.env.INPI_PASSWORD!, rememberMe: false },
-      { headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/plain, */*', 'X-XSRF-TOKEN': xsrfTokenValue, 'Origin': INPI_API_BASE_URL, 'Referer': INPI_COOKIE_SETUP_URL, 'User-Agent': browserUserAgent } }
+      { headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/plain, */*', 'X-XSRF-TOKEN': loginXsrfToken, 'Origin': INPI_API_BASE_URL, 'Referer': INPI_COOKIE_SETUP_URL, 'User-Agent': browserUserAgent } }
     );
     console.log("Login POST to INPI_JSON_LOGIN_URL successful, status:", loginResponse.status);
-
     if (!loginResponse.data || !loginResponse.data.access_token) {
       throw new APIError("No access_token in response from /auth/login", 500, { responseData: loginResponse.data, stage: "token-extraction" });
     }
@@ -109,7 +88,6 @@ async function getAccessToken(): Promise<string> {
     tokenExpiry = Date.now() + (loginResponse.data.expires_in || 3600) * 1000;
     console.log("Successfully obtained access_token.");
     return accessToken;
-
   } catch (error: unknown) {
     logError("getAccessToken", error);
     accessToken = null; xsrfTokenValue = null; tokenExpiry = null;
@@ -123,85 +101,91 @@ async function getAccessToken(): Promise<string> {
   }
 }
 
+// Function to perform the actual search POST, callable for initial attempt and retry
+async function performSearch(bearerToken: string, searchPayload: any): Promise<any> {
+    // Before POSTing to search, attempt a GET to the search service's metadata to get a fresh XSRF token
+    let currentSearchXsrfToken = xsrfTokenValue; // Start with login XSRF or last known
+    console.log(`Attempting preliminary GET to ${INPI_MARQUES_METADATA_URL} for search-specific XSRF token.`);
+    try {
+        await client.get(INPI_MARQUES_METADATA_URL, {
+            headers: {
+                'Authorization': `Bearer ${bearerToken}`,
+                'Accept': 'application/json',
+            }
+        });
+        console.log(`Preliminary GET to ${INPI_MARQUES_METADATA_URL} completed.`);
+        const cookiesForSearch = await cookieJar.getCookies(INPI_MARQUES_METADATA_URL);
+        const specificSearchXsrfCookie = cookiesForSearch.find(c => c.key === 'XSRF-TOKEN');
+        if (specificSearchXsrfCookie?.value) {
+            currentSearchXsrfToken = decodeURIComponent(specificSearchXsrfCookie.value);
+            console.log("Updated XSRF-TOKEN value after metadata call for search:", currentSearchXsrfToken);
+        } else {
+            console.warn(`No new XSRF-TOKEN found from metadata call. Using previous XSRF: ${currentSearchXsrfToken}`);
+        }
+    } catch (metaError) {
+        logError("preliminaryGetToMetadataForSearch", metaError);
+        console.warn(`Preliminary GET to metadata failed. Proceeding with potentially stale XSRF token: ${currentSearchXsrfToken}`);
+    }
+
+    console.log(`Using X-XSRF-TOKEN for search: ${currentSearchXsrfToken || "None"}`);
+    return client.post(
+      INPI_SEARCH_URL,
+      searchPayload,
+      {
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-XSRF-TOKEN": currentSearchXsrfToken || "",
+          'User-Agent': 'Next.js Trademark Search App/1.0'
+        },
+      }
+    );
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const queryFromUser = searchParams.get("q");
     const pageFromUser = searchParams.get("page") || "1";
     const nbResultsPerPageFromUser = searchParams.get("nbResultsPerPage") || "20";
-    const sortFromUser = searchParams.get("sort") || "relevance"; // Default sort field
-    const orderFromUser = searchParams.get("order") || "asc";     // Default sort order
+    const sortFromUser = searchParams.get("sort") || "relevance";
+    const orderFromUser = searchParams.get("order") || "asc";
 
     if (!queryFromUser) {
       return NextResponse.json( { error: "Search query is required", code: "MISSING_QUERY" }, { status: 400 });
     }
 
     console.log("User query:", queryFromUser);
-    const token = await getAccessToken();
+    let token = await getAccessToken();
     console.log("Got access token, preparing search request...");
 
-    // Construct the search payload according to TrademarkQuery schema from Swagger
     const parsedPage = parseInt(pageFromUser);
     const parsedNbResultsPerPage = parseInt(nbResultsPerPageFromUser);
-
     const searchPayload = {
-      query: `[Mark=${queryFromUser}]`, // Basic SolR query syntax
+      query: `[Mark=${queryFromUser}]`,
       position: (parsedPage - 1) * parsedNbResultsPerPage,
       size: parsedNbResultsPerPage,
       sortList: [`${sortFromUser} ${orderFromUser}`],
-      collections: ["FR", "EU", "WO"], // Default collections
-      fields: [ // Default fields to retrieve
-        "ApplicationNumber", "Mark", "MarkCurrentStatusCode",
-        "DEPOSANT", "AGENT_NAME", // Applicant and Representative
-        "ukey",
-        "PublicationDate", "RegistrationDate", "ExpiryDate",
-        "NiceClassDetails", "MarkImageFilename" // Nice classes and image filename
-      ],
-      withFacets: false, // Optional: set to true if you want facet data
-      // facetsList: [], // Optional: specify facets if withFacets is true
-      // withCTMRevendication: false, // Optional
+      collections: ["FR", "EU", "WO"],
+      fields: ["ApplicationNumber", "Mark", "MarkCurrentStatusCode", "DEPOSANT", "AGENT_NAME", "ukey", "PublicationDate", "RegistrationDate", "ExpiryDate", "NiceClassDetails", "MarkImageFilename"],
+      withFacets: false,
     };
     console.log("Constructed search payload:", JSON.stringify(searchPayload, null, 2));
 
     try {
-      const response = await client.post(
-        INPI_SEARCH_URL,
-        searchPayload,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            "X-XSRF-TOKEN": xsrfTokenValue || "",
-            'User-Agent': 'Next.js Trademark Search App/1.0'
-          },
-        }
-      );
+      const response = await performSearch(token, searchPayload);
       console.log("Search response status:", response.status);
       return NextResponse.json(response.data);
 
     } catch (error: unknown) {
       logError("searchRequest", error);
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
-        console.log("Access token invalid for search, clearing cache and retrying search once...");
-        accessToken = null; xsrfTokenValue = null; tokenExpiry = null;
+        console.log("Access token or XSRF token invalid for search, clearing cache and retrying search once...");
+        accessToken = null; xsrfTokenValue = null; tokenExpiry = null; // Force re-auth and new XSRF from login
         try {
-          const newToken = await getAccessToken();
-          // Reconstruct payload for retry, as local vars might be out of scope/changed
-          const retrySearchPayload = {
-            query: `[Mark=${queryFromUser}]`,
-            position: (parsedPage - 1) * parsedNbResultsPerPage,
-            size: parsedNbResultsPerPage,
-            sortList: [`${sortFromUser} ${orderFromUser}`],
-            collections: ["FR", "EU", "WO"],
-            fields: ["ApplicationNumber", "Mark", "MarkCurrentStatusCode", "DEPOSANT", "AGENT_NAME", "ukey", "PublicationDate", "RegistrationDate", "ExpiryDate", "NiceClassDetails", "MarkImageFilename"],
-            withFacets: false,
-          };
-          const retryResponse = await client.post(
-            INPI_SEARCH_URL,
-            retrySearchPayload,
-            { headers: { Authorization: `Bearer ${newToken}`, "Content-Type": "application/json", Accept: "application/json", "X-XSRF-TOKEN": xsrfTokenValue || "", 'User-Agent': 'Next.js Trademark Search App/1.0' } }
-          );
+          const newToken = await getAccessToken(); // Re-authenticates, gets new login XSRF
+          const retryResponse = await performSearch(newToken, searchPayload); // performSearch will try to get metadata XSRF again
           console.log("Search retry successful.");
           return NextResponse.json(retryResponse.data);
         } catch (retryError: unknown) {
@@ -212,7 +196,7 @@ export async function GET(request: Request) {
           throw new APIError(`Failed to retry search: ${retryError instanceof Error ? retryError.message : String(retryError)}`, rStatus, { originalSearchError: { message: (error as Error).message }, retryAttemptError: { data: rDetails } });
         }
       }
-      if (axios.isAxiosError(error)) throw new APIError(`Search failed: ${error.response?.data || error.message}`, error.response?.status || 500, error.response?.data, error.response?.headers);
+      if (axios.isAxiosError(error)) throw new APIError(`Search failed: ${error.response?.data?.error_description || error.response?.data || error.message}`, error.response?.status || 500, error.response?.data, error.response?.headers);
       throw new APIError("Unexpected error during search", 500, { errorDetails: String(error) });
     }
   } catch (error: unknown) {
