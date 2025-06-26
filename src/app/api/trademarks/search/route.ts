@@ -145,22 +145,33 @@ export async function GET(request: Request) {
     const queryFromUser = searchParams.get("q");
     const pageFromUser = searchParams.get("page") || "1";
     const nbResultsPerPageFromUser = searchParams.get("nbResultsPerPage") || "20";
-    // User sort parameters are temporarily ignored to test hardcoded "MARK asc"
-    // const sortFromUser = searchParams.get("sort") || "relevance";
-    // const orderFromUser = searchParams.get("order") || "asc";
+    let sortFieldFromUrl = searchParams.get("sort") || "relevance";
+    let orderFromUrl = searchParams.get("order") || "asc";
 
     if (!queryFromUser) {
       return NextResponse.json( { error: "Search query is required", code: "MISSING_QUERY" }, { status: 400 });
     }
 
-    console.log("User query:", queryFromUser);
+    console.log("User query:", queryFromUser, "Requested Sort by:", sortFieldFromUrl, "Order:", orderFromUrl);
     let token = await getAccessToken();
     console.log("Got access token, preparing search request...");
 
     const parsedPage = parseInt(pageFromUser);
     const parsedNbResultsPerPage = parseInt(nbResultsPerPageFromUser);
 
-    const searchPayload = {
+    let finalSortField: string;
+    let finalSortOrder: string = orderFromUrl.toLowerCase() === 'desc' ? 'desc' : 'asc';
+
+    if (sortFieldFromUrl.toLowerCase() === 'relevance') {
+      finalSortField = 'APPLICATION_DATE'; // Default valid field, UPPERCASE
+      finalSortOrder = 'desc'; // Default order for relevance mapping
+      console.log(`Sort by 'relevance' requested, mapping to '${finalSortField} ${finalSortOrder}'`);
+    } else {
+      finalSortField = sortFieldFromUrl.toUpperCase(); // Convert user-provided field to UPPERCASE
+      console.log(`Using user sort: '${finalSortField} ${finalSortOrder}'`);
+    }
+
+    const searchPayload: any = { // Add 'any' to allow conditional sortList
       query: `[Mark=${queryFromUser}]`,
       position: (parsedPage - 1) * parsedNbResultsPerPage,
       size: parsedNbResultsPerPage,
@@ -171,15 +182,21 @@ export async function GET(request: Request) {
         "PublicationDate", "RegistrationDate", "ExpiryDate",
         "NiceClassDetails", "MarkImageFilename"
       ],
-      sortList: ["MARK asc"], // Hardcoded to test this known-good sort from Swagger
+      // Only include sortList if a sort field is determined (always true with current logic)
+      sortList: [`${finalSortField} ${finalSortOrder}`],
     };
-    console.log("Constructed search payload (Hardcoded sortList: [\"MARK asc\"]):", JSON.stringify(searchPayload, null, 2));
+    // Example: to make sortList truly optional if no sort params are given by user
+    // if (searchParams.has("sort")) { // Or some other condition
+    //   searchPayload.sortList = [`${finalSortField} ${finalSortOrder}`];
+    // }
+
+
+    console.log("Constructed search payload:", JSON.stringify(searchPayload, null, 2));
 
     try {
       const response = await performSearch(token, searchPayload);
       console.log("Search response status from INPI:", response.status);
 
-      // Detailed logging of response.data from INPI
       console.log("Data received from INPI (type):", typeof response.data);
       console.log("Is INPI data.results an array?", Array.isArray(response.data?.results));
       try {
@@ -198,15 +215,15 @@ export async function GET(request: Request) {
         accessToken = null; xsrfTokenValue = null; tokenExpiry = null;
         try {
           const newToken = await getAccessToken();
-
-          const retrySearchPayload = { // Ensure retry uses the same hardcoded sort for this test
-            ...searchPayload
+          // Re-construct payload for retry, ensuring sort handling is consistent
+          // (using finalSortField, finalSortOrder from the outer scope for consistency in retry)
+          const retrySearchPayload = {
+            ...searchPayload, // Uses the payload from the first attempt, including its sortList
           };
-          console.log("Constructed retry search payload (Hardcoded sortList: [\"MARK asc\"]):", JSON.stringify(retrySearchPayload, null, 2));
+          console.log("Constructed retry search payload:", JSON.stringify(retrySearchPayload, null, 2));
           const retryResponse = await performSearch(newToken, retrySearchPayload);
 
           console.log("Retry search response status from INPI:", retryResponse.status);
-          // Detailed logging for retry response data
           console.log("Data received from INPI on retry (type):", typeof retryResponse.data);
           console.log("Is INPI data.results an array on retry?", Array.isArray(retryResponse.data?.results));
           try {
