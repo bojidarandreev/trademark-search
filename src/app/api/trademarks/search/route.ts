@@ -240,8 +240,9 @@ export async function GET(request: Request) {
     const pageFromUser = searchParams.get("page") || "1";
     const nbResultsPerPageFromUser =
       searchParams.get("nbResultsPerPage") || "20";
-    // const sortFromUser = searchParams.get("sort") || "relevance"; // Temporarily unused
-    // const orderFromUser = searchParams.get("order") || "asc";     // Temporarily unused
+    // User sort parameters are temporarily ignored to test hardcoded "MARK asc"
+    // const sortFromUser = searchParams.get("sort") || "relevance";
+    // const orderFromUser = searchParams.get("order") || "asc";
 
     if (!queryFromUser) {
       return NextResponse.json(
@@ -257,14 +258,12 @@ export async function GET(request: Request) {
     const parsedPage = parseInt(pageFromUser);
     const parsedNbResultsPerPage = parseInt(nbResultsPerPageFromUser);
 
-    // Step 2a: Restore full fields list
     const searchPayload = {
       query: `[Mark=${queryFromUser}]`,
       position: (parsedPage - 1) * parsedNbResultsPerPage,
       size: parsedNbResultsPerPage,
-      collections: ["FR"], // Still simplified
+      collections: ["FR", "EU", "WO"],
       fields: [
-        // Restored full list
         "ApplicationNumber",
         "Mark",
         "MarkCurrentStatusCode",
@@ -277,16 +276,36 @@ export async function GET(request: Request) {
         "NiceClassDetails",
         "MarkImageFilename",
       ],
-      // sortList still omitted
+      sortList: ["MARK asc"], // Hardcoded to test this known-good sort from Swagger
     };
     console.log(
-      "Constructed search payload (full fields):",
+      'Constructed search payload (Hardcoded sortList: ["MARK asc"]):',
       JSON.stringify(searchPayload, null, 2)
     );
 
     try {
       const response = await performSearch(token, searchPayload);
-      console.log("Search response status:", response.status);
+      console.log("Search response status from INPI:", response.status);
+
+      // Detailed logging of response.data from INPI
+      console.log("Data received from INPI (type):", typeof response.data);
+      console.log(
+        "Is INPI data.results an array?",
+        Array.isArray(response.data?.results)
+      );
+      try {
+        console.log(
+          "Snippet of INPI data (first 1000 chars):",
+          JSON.stringify(response.data, null, 2).substring(0, 1000)
+        );
+      } catch (e: any) {
+        console.error(
+          "Could not stringify response.data from INPI:",
+          e.message
+        );
+        console.log("Raw response.data from INPI:", response.data);
+      }
+
       return NextResponse.json(response.data);
     } catch (error: unknown) {
       logError("searchRequest", error);
@@ -302,15 +321,49 @@ export async function GET(request: Request) {
         tokenExpiry = null;
         try {
           const newToken = await getAccessToken();
-          // Re-construct payload for retry with full fields
+
           const retrySearchPayload = {
-            ...searchPayload, // Use the same payload structure as the initial attempt
+            // Ensure retry uses the same hardcoded sort for this test
+            ...searchPayload,
           };
+          console.log(
+            'Constructed retry search payload (Hardcoded sortList: ["MARK asc"]):',
+            JSON.stringify(retrySearchPayload, null, 2)
+          );
           const retryResponse = await performSearch(
             newToken,
             retrySearchPayload
           );
-          console.log("Search retry successful.");
+
+          console.log(
+            "Retry search response status from INPI:",
+            retryResponse.status
+          );
+          // Detailed logging for retry response data
+          console.log(
+            "Data received from INPI on retry (type):",
+            typeof retryResponse.data
+          );
+          console.log(
+            "Is INPI data.results an array on retry?",
+            Array.isArray(retryResponse.data?.results)
+          );
+          try {
+            console.log(
+              "Snippet of INPI data on retry (first 1000 chars):",
+              JSON.stringify(retryResponse.data, null, 2).substring(0, 1000)
+            );
+          } catch (e: any) {
+            console.error(
+              "Could not stringify retryResponse.data from INPI:",
+              e.message
+            );
+            console.log(
+              "Raw retryResponse.data from INPI:",
+              retryResponse.data
+            );
+          }
+
           return NextResponse.json(retryResponse.data);
         } catch (retryError: unknown) {
           logError("searchRetry", retryError);
@@ -339,7 +392,11 @@ export async function GET(request: Request) {
       }
       if (axios.isAxiosError(error))
         throw new APIError(
-          `Search failed: ${error.response?.data || error.message}`,
+          `Search failed: ${
+            error.response?.data?.error_description ||
+            error.response?.data ||
+            error.message
+          }`,
           error.response?.status || 500,
           error.response?.data,
           error.response?.headers
