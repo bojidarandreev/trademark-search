@@ -145,28 +145,19 @@ export async function GET(request: Request) {
     const queryFromUser = searchParams.get("q");
     const pageFromUser = searchParams.get("page") || "1";
     const nbResultsPerPageFromUser = searchParams.get("nbResultsPerPage") || "20";
-    let sortFromUser = searchParams.get("sort") || "relevance";
-    let orderFromUser = searchParams.get("order") || "asc";
+    // const sortFromUser = searchParams.get("sort") || "relevance"; // Ignored for this specific test
+    // const orderFromUser = searchParams.get("order") || "asc";     // Ignored for this specific test
 
     if (!queryFromUser) {
       return NextResponse.json( { error: "Search query is required", code: "MISSING_QUERY" }, { status: 400 });
     }
 
-    console.log("User query:", queryFromUser, "Sort by:", sortFromUser, "Order:", orderFromUser);
+    console.log("User query:", queryFromUser); // Removed sort/order from this log for clarity during test
     let token = await getAccessToken();
     console.log("Got access token, preparing search request...");
 
     const parsedPage = parseInt(pageFromUser);
     const parsedNbResultsPerPage = parseInt(nbResultsPerPageFromUser);
-
-    // Handle 'relevance' sort by mapping to a known valid default
-    let finalSortField = sortFromUser;
-    let finalSortOrder = orderFromUser;
-    if (sortFromUser.toLowerCase() === 'relevance') {
-      finalSortField = 'ApplicationDate'; // INPI API default from observation
-      finalSortOrder = 'desc';
-      console.log(`Sort by 'relevance' requested, mapping to '${finalSortField} ${finalSortOrder}'`);
-    }
 
     const searchPayload = {
       query: `[Mark=${queryFromUser}]`,
@@ -179,9 +170,9 @@ export async function GET(request: Request) {
         "PublicationDate", "RegistrationDate", "ExpiryDate",
         "NiceClassDetails", "MarkImageFilename"
       ],
-      sortList: [`${finalSortField} ${finalSortOrder}`], // Re-introduced sortList
+      sortList: ["MARK asc"], // Hardcoded for this test based on Swagger example
     };
-    console.log("Constructed search payload (with sortList):", JSON.stringify(searchPayload, null, 2));
+    console.log("Constructed search payload (testing sortList with MARK asc):", JSON.stringify(searchPayload, null, 2));
 
     try {
       const response = await performSearch(token, searchPayload);
@@ -195,16 +186,9 @@ export async function GET(request: Request) {
         accessToken = null; xsrfTokenValue = null; tokenExpiry = null;
         try {
           const newToken = await getAccessToken();
-          // Re-construct payload for retry, ensuring sort handling is consistent
-          let retrySortField = sortFromUser;
-          let retrySortOrder = orderFromUser;
-          if (sortFromUser.toLowerCase() === 'relevance') {
-            retrySortField = 'ApplicationDate';
-            retrySortOrder = 'desc';
-          }
+          // Re-construct payload for retry, ensuring sortList is correctly formed for this test
           const retrySearchPayload = {
-            ...searchPayload, // Base payload
-            sortList: [`${retrySortField} ${retrySortOrder}`], // Ensure sortList is correctly formed for retry
+            ...searchPayload // Uses the same payload with hardcoded sortList
           };
           const retryResponse = await performSearch(newToken, retrySearchPayload);
           console.log("Search retry successful.");
