@@ -11,7 +11,7 @@ const INPI_SEARCH_URL = `${INPI_API_BASE_URL}/services/apidiffusion/api/marques/
 const INPI_MARQUES_METADATA_URL = `${INPI_API_BASE_URL}/services/apidiffusion/api/marques/metadata`;
 
 let accessToken: string | null = null;
-let xsrfTokenValue: string | null = null; // Stores the most recently obtained XSRF token string value
+let xsrfTokenValue: string | null = null;
 let tokenExpiry: number | null = null;
 
 const cookieJar = new tough.CookieJar();
@@ -73,7 +73,7 @@ async function getAccessToken(): Promise<string> {
     }
     const loginXsrfToken = decodeURIComponent(xsrfCookie.value);
     console.log("Extracted XSRF-TOKEN cookie value for login:", loginXsrfToken);
-    xsrfTokenValue = loginXsrfToken; // Set the global for now, might be overwritten by search-specific one
+    xsrfTokenValue = loginXsrfToken;
 
     console.log(`Attempting POST to ${INPI_JSON_LOGIN_URL} with JSON payload and XSRF token.`);
     const loginResponse = await client.post(INPI_JSON_LOGIN_URL,
@@ -101,17 +101,12 @@ async function getAccessToken(): Promise<string> {
   }
 }
 
-// Function to perform the actual search POST, callable for initial attempt and retry
 async function performSearch(bearerToken: string, searchPayload: any): Promise<any> {
-    // Before POSTing to search, attempt a GET to the search service's metadata to get a fresh XSRF token
-    let currentSearchXsrfToken = xsrfTokenValue; // Start with login XSRF or last known
+    let currentSearchXsrfToken = xsrfTokenValue;
     console.log(`Attempting preliminary GET to ${INPI_MARQUES_METADATA_URL} for search-specific XSRF token.`);
     try {
         await client.get(INPI_MARQUES_METADATA_URL, {
-            headers: {
-                'Authorization': `Bearer ${bearerToken}`,
-                'Accept': 'application/json',
-            }
+            headers: { 'Authorization': `Bearer ${bearerToken}`, 'Accept': 'application/json' }
         });
         console.log(`Preliminary GET to ${INPI_MARQUES_METADATA_URL} completed.`);
         const cookiesForSearch = await cookieJar.getCookies(INPI_MARQUES_METADATA_URL);
@@ -124,10 +119,11 @@ async function performSearch(bearerToken: string, searchPayload: any): Promise<a
         }
     } catch (metaError) {
         logError("preliminaryGetToMetadataForSearch", metaError);
-        console.warn(`Preliminary GET to metadata failed. Proceeding with potentially stale XSRF token: ${currentSearchXsrfToken}`);
+        console.warn(`Preliminary GET to metadata failed. Proceeding with XSRF token from login: ${currentSearchXsrfToken}`);
     }
 
-    console.log(`Using X-XSRF-TOKEN for search: ${currentSearchXsrfToken || "None"}`);
+    xsrfTokenValue = currentSearchXsrfToken; // Update global xsrfTokenValue with the one to be used for search
+    console.log(`Using X-XSRF-TOKEN for search: ${xsrfTokenValue || "None"}`);
     return client.post(
       INPI_SEARCH_URL,
       searchPayload,
@@ -136,7 +132,7 @@ async function performSearch(bearerToken: string, searchPayload: any): Promise<a
           Authorization: `Bearer ${bearerToken}`,
           "Content-Type": "application/json",
           Accept: "application/json",
-          "X-XSRF-TOKEN": currentSearchXsrfToken || "",
+          "X-XSRF-TOKEN": xsrfTokenValue || "",
           'User-Agent': 'Next.js Trademark Search App/1.0'
         },
       }
@@ -149,8 +145,9 @@ export async function GET(request: Request) {
     const queryFromUser = searchParams.get("q");
     const pageFromUser = searchParams.get("page") || "1";
     const nbResultsPerPageFromUser = searchParams.get("nbResultsPerPage") || "20";
-    const sortFromUser = searchParams.get("sort") || "relevance";
-    const orderFromUser = searchParams.get("order") || "asc";
+    // Sort and order are temporarily unused for payload simplification
+    // const sortFromUser = searchParams.get("sort") || "relevance";
+    // const orderFromUser = searchParams.get("order") || "asc";
 
     if (!queryFromUser) {
       return NextResponse.json( { error: "Search query is required", code: "MISSING_QUERY" }, { status: 400 });
@@ -162,16 +159,18 @@ export async function GET(request: Request) {
 
     const parsedPage = parseInt(pageFromUser);
     const parsedNbResultsPerPage = parseInt(nbResultsPerPageFromUser);
+
+    // Simplified search payload - Attempt 1
     const searchPayload = {
-      query: `[Mark=${queryFromUser}]`,
+      query: `[Mark=${queryFromUser}]`, // Sticking to Swagger example structure for query
       position: (parsedPage - 1) * parsedNbResultsPerPage,
       size: parsedNbResultsPerPage,
-      sortList: [`${sortFromUser} ${orderFromUser}`],
-      collections: ["FR", "EU", "WO"],
-      fields: ["ApplicationNumber", "Mark", "MarkCurrentStatusCode", "DEPOSANT", "AGENT_NAME", "ukey", "PublicationDate", "RegistrationDate", "ExpiryDate", "NiceClassDetails", "MarkImageFilename"],
-      withFacets: false,
+      // sortList: [`${sortFromUser} ${orderFromUser}`], // Removed for simplification
+      collections: ["FR"], // Simplified
+      fields: ["ApplicationNumber", "Mark"], // Simplified
+      // withFacets: false, // Omitted
     };
-    console.log("Constructed search payload:", JSON.stringify(searchPayload, null, 2));
+    console.log("Constructed (simplified) search payload:", JSON.stringify(searchPayload, null, 2));
 
     try {
       const response = await performSearch(token, searchPayload);
@@ -182,10 +181,18 @@ export async function GET(request: Request) {
       logError("searchRequest", error);
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
         console.log("Access token or XSRF token invalid for search, clearing cache and retrying search once...");
-        accessToken = null; xsrfTokenValue = null; tokenExpiry = null; // Force re-auth and new XSRF from login
+        accessToken = null; xsrfTokenValue = null; tokenExpiry = null;
         try {
-          const newToken = await getAccessToken(); // Re-authenticates, gets new login XSRF
-          const retryResponse = await performSearch(newToken, searchPayload); // performSearch will try to get metadata XSRF again
+          const newToken = await getAccessToken();
+          // Re-construct simplified payload for retry
+          const retrySearchPayload = {
+            query: `[Mark=${queryFromUser}]`,
+            position: (parsedPage - 1) * parsedNbResultsPerPage,
+            size: parsedNbResultsPerPage,
+            collections: ["FR"],
+            fields: ["ApplicationNumber", "Mark"],
+          };
+          const retryResponse = await performSearch(newToken, retrySearchPayload);
           console.log("Search retry successful.");
           return NextResponse.json(retryResponse.data);
         } catch (retryError: unknown) {
@@ -196,7 +203,7 @@ export async function GET(request: Request) {
           throw new APIError(`Failed to retry search: ${retryError instanceof Error ? retryError.message : String(retryError)}`, rStatus, { originalSearchError: { message: (error as Error).message }, retryAttemptError: { data: rDetails } });
         }
       }
-      if (axios.isAxiosError(error)) throw new APIError(`Search failed: ${error.response?.data?.error_description || error.response?.data || error.message}`, error.response?.status || 500, error.response?.data, error.response?.headers);
+      if (axios.isAxiosError(error)) throw new APIError(`Search failed: ${error.response?.data || error.message}`, error.response?.status || 500, error.response?.data, error.response?.headers);
       throw new APIError("Unexpected error during search", 500, { errorDetails: String(error) });
     }
   } catch (error: unknown) {
