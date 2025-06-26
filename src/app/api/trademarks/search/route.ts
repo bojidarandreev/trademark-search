@@ -145,35 +145,43 @@ export async function GET(request: Request) {
     const queryFromUser = searchParams.get("q");
     const pageFromUser = searchParams.get("page") || "1";
     const nbResultsPerPageFromUser = searchParams.get("nbResultsPerPage") || "20";
-    // const sortFromUser = searchParams.get("sort") || "relevance"; // Temporarily unused
-    // const orderFromUser = searchParams.get("order") || "asc";     // Temporarily unused
+    let sortFromUser = searchParams.get("sort") || "relevance";
+    let orderFromUser = searchParams.get("order") || "asc";
 
     if (!queryFromUser) {
       return NextResponse.json( { error: "Search query is required", code: "MISSING_QUERY" }, { status: 400 });
     }
 
-    console.log("User query:", queryFromUser);
+    console.log("User query:", queryFromUser, "Sort by:", sortFromUser, "Order:", orderFromUser);
     let token = await getAccessToken();
     console.log("Got access token, preparing search request...");
 
     const parsedPage = parseInt(pageFromUser);
     const parsedNbResultsPerPage = parseInt(nbResultsPerPageFromUser);
 
-    // Step 2b: Restore full collections list
+    // Handle 'relevance' sort by mapping to a known valid default
+    let finalSortField = sortFromUser;
+    let finalSortOrder = orderFromUser;
+    if (sortFromUser.toLowerCase() === 'relevance') {
+      finalSortField = 'ApplicationDate'; // INPI API default from observation
+      finalSortOrder = 'desc';
+      console.log(`Sort by 'relevance' requested, mapping to '${finalSortField} ${finalSortOrder}'`);
+    }
+
     const searchPayload = {
       query: `[Mark=${queryFromUser}]`,
       position: (parsedPage - 1) * parsedNbResultsPerPage,
       size: parsedNbResultsPerPage,
-      collections: ["FR", "EU", "WO"], // Restored full list
-      fields: [ // Full list from previous successful step
+      collections: ["FR", "EU", "WO"],
+      fields: [
         "ApplicationNumber", "Mark", "MarkCurrentStatusCode",
         "DEPOSANT", "AGENT_NAME", "ukey",
         "PublicationDate", "RegistrationDate", "ExpiryDate",
         "NiceClassDetails", "MarkImageFilename"
       ],
-      // sortList still omitted
+      sortList: [`${finalSortField} ${finalSortOrder}`], // Re-introduced sortList
     };
-    console.log("Constructed search payload (full fields, full collections):", JSON.stringify(searchPayload, null, 2));
+    console.log("Constructed search payload (with sortList):", JSON.stringify(searchPayload, null, 2));
 
     try {
       const response = await performSearch(token, searchPayload);
@@ -187,9 +195,16 @@ export async function GET(request: Request) {
         accessToken = null; xsrfTokenValue = null; tokenExpiry = null;
         try {
           const newToken = await getAccessToken();
-          // Re-construct payload for retry
+          // Re-construct payload for retry, ensuring sort handling is consistent
+          let retrySortField = sortFromUser;
+          let retrySortOrder = orderFromUser;
+          if (sortFromUser.toLowerCase() === 'relevance') {
+            retrySortField = 'ApplicationDate';
+            retrySortOrder = 'desc';
+          }
           const retrySearchPayload = {
-            ...searchPayload // Use the same payload structure as the initial attempt
+            ...searchPayload, // Base payload
+            sortList: [`${retrySortField} ${retrySortOrder}`], // Ensure sortList is correctly formed for retry
           };
           const retryResponse = await performSearch(newToken, retrySearchPayload);
           console.log("Search retry successful.");
@@ -202,7 +217,7 @@ export async function GET(request: Request) {
           throw new APIError(`Failed to retry search: ${retryError instanceof Error ? retryError.message : String(retryError)}`, rStatus, { originalSearchError: { message: (error as Error).message }, retryAttemptError: { data: rDetails } });
         }
       }
-      if (axios.isAxiosError(error)) throw new APIError(`Search failed: ${error.response?.data || error.message}`, error.response?.status || 500, error.response?.data, error.response?.headers);
+      if (axios.isAxiosError(error)) throw new APIError(`Search failed: ${error.response?.data?.error_description || error.response?.data || error.message}`, error.response?.status || 500, error.response?.data, error.response?.headers);
       throw new APIError("Unexpected error during search", 500, { errorDetails: String(error) });
     }
   } catch (error: unknown) {
