@@ -1,65 +1,53 @@
 import { NextResponse } from "next/server";
 import axios, { AxiosError, AxiosInstance } from "axios";
-// cookies from next/headers is not used if we manage cookies via axios-cookiejar-support for client-side requests made by server
-// import { cookies } from "next/headers";
+// import { cookies } from "next/headers"; // Not used directly for client-side calls by server
 import { wrapper } from "axios-cookiejar-support";
 import tough from "tough-cookie";
 import { Cookie } from "tough-cookie";
 
 const INPI_API_BASE_URL = "https://api-gateway.inpi.fr";
-// URL for the HTML login page, primarily to get cookies set
 const INPI_COOKIE_SETUP_URL = `${INPI_API_BASE_URL}/login`;
-// URL for the actual login POST with JSON payload, based on HAR analysis
 const INPI_JSON_LOGIN_URL = `${INPI_API_BASE_URL}/auth/login`;
-// Search URL remains the same
 const INPI_SEARCH_URL = `${INPI_API_BASE_URL}/services/apidiffusion/api/marques/search`;
 
-// Cache the access token and XSRF token string value
 let accessToken: string | null = null;
 let xsrfTokenValue: string | null = null;
 let tokenExpiry: number | null = null;
 
-// Create axios instance with cookie jar support
 const cookieJar = new tough.CookieJar();
 const client: AxiosInstance = wrapper(
   axios.create({
     jar: cookieJar,
     withCredentials: true,
     headers: {
-      // Default headers for 'client' instance
-      Accept: "application/json, text/plain, */*", // Default Accept
+      Accept: "application/json, text/plain, */*",
     },
   })
 );
 
-// Custom error class for API errors
 class APIError extends Error {
   constructor(
     message: string,
     public statusCode: number,
     public details?: any,
-    public responseHeaders?: any // Changed from 'headers' to avoid conflict with Error.prototype.headers
+    public responseHeaders?: any
   ) {
     super(message);
     this.name = "APIError";
   }
 }
 
-// Helper function to log detailed error information
 function logError(context: string, error: any) {
-  const errorDetails: any = {
-    context,
-    message: error.message,
-  };
+  const errorDetails: any = { context, message: error.message };
   if (axios.isAxiosError(error)) {
     errorDetails.status = error.response?.status;
     errorDetails.statusText = error.response?.statusText;
     errorDetails.data = error.response?.data;
-    errorDetails.responseHeaders = error.response?.headers; // Use the renamed property
+    errorDetails.responseHeaders = error.response?.headers;
     errorDetails.config = {
       url: error.config?.url,
       method: error.config?.method,
-      requestHeaders: error.config?.headers, // Renamed for clarity
+      requestHeaders: error.config?.headers,
     };
   } else if (error instanceof APIError) {
     errorDetails.statusCode = error.statusCode;
@@ -95,14 +83,11 @@ async function getAccessToken(): Promise<string> {
   accessToken = null;
   xsrfTokenValue = null;
   tokenExpiry = null;
-  // await cookieJar.removeAllCookies(); // Optional: Aggressively clear cookies if needed
-
   console.log("Requesting new access token via /auth/login flow...");
   const browserUserAgent =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
 
   try {
-    // Step 1: GET HTML login page to obtain/prime cookies, especially XSRF-TOKEN
     console.log(
       `Attempting initial GET to ${INPI_COOKIE_SETUP_URL} to obtain session cookies.`
     );
@@ -117,10 +102,8 @@ async function getAccessToken(): Promise<string> {
       console.log(`Initial GET to ${INPI_COOKIE_SETUP_URL} completed.`);
     } catch (error) {
       logError("initialGetToCookieSetupUrl", error);
-      // This might not be fatal if cookies were set despite an error page.
     }
 
-    // Extract XSRF-TOKEN cookie value from the jar
     const cookiesFromJar = await cookieJar.getCookies(INPI_COOKIE_SETUP_URL);
     const xsrfCookie = cookiesFromJar.find(
       (c: Cookie) => c.key === "XSRF-TOKEN"
@@ -146,7 +129,6 @@ async function getAccessToken(): Promise<string> {
     xsrfTokenValue = decodeURIComponent(xsrfCookie.value);
     console.log("Extracted XSRF-TOKEN cookie value:", xsrfTokenValue);
 
-    // Step 2: POST credentials to /auth/login (JSON payload)
     console.log(
       `Attempting POST to ${INPI_JSON_LOGIN_URL} with JSON payload and XSRF token.`
     );
@@ -155,12 +137,12 @@ async function getAccessToken(): Promise<string> {
       {
         username: process.env.INPI_USERNAME!,
         password: process.env.INPI_PASSWORD!,
-        rememberMe: false, // As per HAR
+        rememberMe: false,
       },
       {
         headers: {
           "Content-Type": "application/json",
-          Accept: "application/json, text/plain, */*", // From HAR
+          Accept: "application/json, text/plain, */*",
           "X-XSRF-TOKEN": xsrfTokenValue,
           Origin: INPI_API_BASE_URL,
           Referer: INPI_COOKIE_SETUP_URL,
@@ -168,7 +150,6 @@ async function getAccessToken(): Promise<string> {
         },
       }
     );
-
     console.log(
       "Login POST to INPI_JSON_LOGIN_URL successful, status:",
       loginResponse.status
@@ -180,19 +161,15 @@ async function getAccessToken(): Promise<string> {
         stage: "token-extraction",
       });
     }
-
     accessToken = loginResponse.data.access_token;
     tokenExpiry = Date.now() + (loginResponse.data.expires_in || 3600) * 1000;
-
     console.log("Successfully obtained access_token.");
     return accessToken;
   } catch (error: unknown) {
     logError("getAccessToken", error);
-
     accessToken = null;
     xsrfTokenValue = null;
     tokenExpiry = null;
-
     if (error instanceof APIError) throw error;
     if (axios.isAxiosError(error)) {
       const status = error.response?.status;
@@ -216,47 +193,67 @@ async function getAccessToken(): Promise<string> {
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const query = searchParams.get("q");
-    const page = searchParams.get("page") || "1";
-    const nbResultsPerPage = searchParams.get("nbResultsPerPage") || "20";
-    const sort = searchParams.get("sort") || "relevance";
-    const order = searchParams.get("order") || "asc";
+    const queryFromUser = searchParams.get("q");
+    const pageFromUser = searchParams.get("page") || "1";
+    const nbResultsPerPageFromUser =
+      searchParams.get("nbResultsPerPage") || "20";
+    const sortFromUser = searchParams.get("sort") || "relevance"; // Default sort field
+    const orderFromUser = searchParams.get("order") || "asc"; // Default sort order
 
-    if (!query) {
+    if (!queryFromUser) {
       return NextResponse.json(
         { error: "Search query is required", code: "MISSING_QUERY" },
         { status: 400 }
       );
     }
 
-    console.log("Searching for:", query);
+    console.log("User query:", queryFromUser);
     const token = await getAccessToken();
-    console.log("Got access token, making search request...");
+    console.log("Got access token, preparing search request...");
+
+    // Construct the search payload according to TrademarkQuery schema from Swagger
+    const parsedPage = parseInt(pageFromUser);
+    const parsedNbResultsPerPage = parseInt(nbResultsPerPageFromUser);
+
+    const searchPayload = {
+      query: `[Mark=${queryFromUser}]`, // Basic SolR query syntax
+      position: (parsedPage - 1) * parsedNbResultsPerPage,
+      size: parsedNbResultsPerPage,
+      sortList: [`${sortFromUser} ${orderFromUser}`],
+      collections: ["FR", "EU", "WO"], // Default collections
+      fields: [
+        // Default fields to retrieve
+        "ApplicationNumber",
+        "Mark",
+        "MarkCurrentStatusCode",
+        "DEPOSANT",
+        "AGENT_NAME", // Applicant and Representative
+        "ukey",
+        "PublicationDate",
+        "RegistrationDate",
+        "ExpiryDate",
+        "NiceClassDetails",
+        "MarkImageFilename", // Nice classes and image filename
+      ],
+      withFacets: false, // Optional: set to true if you want facet data
+      // facetsList: [], // Optional: specify facets if withFacets is true
+      // withCTMRevendication: false, // Optional
+    };
+    console.log(
+      "Constructed search payload:",
+      JSON.stringify(searchPayload, null, 2)
+    );
 
     try {
-      // Use 'client' instance for search request to ensure cookie context is maintained if needed by search endpoint
-      const response = await client.post(
-        INPI_SEARCH_URL,
-        {
-          query,
-          page: parseInt(page),
-          nbResultsPerPage: parseInt(nbResultsPerPage),
-          sort,
-          order,
-          type: "brands",
-          advancedSearch: {},
-          filter: {},
+      const response = await client.post(INPI_SEARCH_URL, searchPayload, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-XSRF-TOKEN": xsrfTokenValue || "",
+          "User-Agent": "Next.js Trademark Search App/1.0",
         },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            "X-XSRF-TOKEN": xsrfTokenValue || "", // Send XSRF token if available
-            "User-Agent": "Next.js Trademark Search App/1.0",
-          },
-        }
-      );
+      });
       console.log("Search response status:", response.status);
       return NextResponse.json(response.data);
     } catch (error: unknown) {
@@ -273,18 +270,31 @@ export async function GET(request: Request) {
         tokenExpiry = null;
         try {
           const newToken = await getAccessToken();
+          // Reconstruct payload for retry, as local vars might be out of scope/changed
+          const retrySearchPayload = {
+            query: `[Mark=${queryFromUser}]`,
+            position: (parsedPage - 1) * parsedNbResultsPerPage,
+            size: parsedNbResultsPerPage,
+            sortList: [`${sortFromUser} ${orderFromUser}`],
+            collections: ["FR", "EU", "WO"],
+            fields: [
+              "ApplicationNumber",
+              "Mark",
+              "MarkCurrentStatusCode",
+              "DEPOSANT",
+              "AGENT_NAME",
+              "ukey",
+              "PublicationDate",
+              "RegistrationDate",
+              "ExpiryDate",
+              "NiceClassDetails",
+              "MarkImageFilename",
+            ],
+            withFacets: false,
+          };
           const retryResponse = await client.post(
             INPI_SEARCH_URL,
-            {
-              query,
-              page: parseInt(page),
-              nbResultsPerPage: parseInt(nbResultsPerPage),
-              sort,
-              order,
-              type: "brands",
-              advancedSearch: {},
-              filter: {},
-            },
+            retrySearchPayload,
             {
               headers: {
                 Authorization: `Bearer ${newToken}`,
@@ -324,7 +334,7 @@ export async function GET(request: Request) {
       }
       if (axios.isAxiosError(error))
         throw new APIError(
-          `Search failed: ${error.message}`,
+          `Search failed: ${error.response?.data || error.message}`,
           error.response?.status || 500,
           error.response?.data,
           error.response?.headers
