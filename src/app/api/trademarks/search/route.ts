@@ -1,18 +1,22 @@
 import { NextResponse } from "next/server";
 import axios, { AxiosError, AxiosInstance } from "axios";
-import { cookies } from "next/headers";
+// cookies from next/headers is not used if we manage cookies via axios-cookiejar-support for client-side requests made by server
+// import { cookies } from "next/headers";
 import { wrapper } from "axios-cookiejar-support";
 import tough from "tough-cookie";
 import { Cookie } from "tough-cookie";
 
 const INPI_API_BASE_URL = "https://api-gateway.inpi.fr";
-const INPI_AUTH_URL = `${INPI_API_BASE_URL}/services/uaa/api/authenticate`;
-const INPI_TOKEN_URL = `${INPI_API_BASE_URL}/services/uaa/oauth/token`;
+// URL for the HTML login page, primarily to get cookies set
+const INPI_COOKIE_SETUP_URL = `${INPI_API_BASE_URL}/login`;
+// URL for the actual login POST with JSON payload, based on HAR analysis
+const INPI_JSON_LOGIN_URL = `${INPI_API_BASE_URL}/auth/login`;
+// Search URL remains the same
 const INPI_SEARCH_URL = `${INPI_API_BASE_URL}/services/apidiffusion/api/marques/search`;
 
-// Cache the access token and XSRF token
+// Cache the access token and XSRF token string value
 let accessToken: string | null = null;
-let xsrfToken: string | null = null;
+let xsrfTokenValue: string | null = null;
 let tokenExpiry: number | null = null;
 
 // Create axios instance with cookie jar support
@@ -22,11 +26,8 @@ const client: AxiosInstance = wrapper(
     jar: cookieJar,
     withCredentials: true,
     headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "User-Agent": "Next.js/14.0.0",
-      Origin: "https://data.inpi.fr",
-      Referer: "https://data.inpi.fr/",
+      // Default headers for 'client' instance
+      Accept: "application/json, text/plain, */*", // Default Accept
     },
   })
 );
@@ -37,7 +38,7 @@ class APIError extends Error {
     message: string,
     public statusCode: number,
     public details?: any,
-    public headers?: any
+    public responseHeaders?: any // Changed from 'headers' to avoid conflict with Error.prototype.headers
   ) {
     super(message);
     this.name = "APIError";
@@ -46,23 +47,32 @@ class APIError extends Error {
 
 // Helper function to log detailed error information
 function logError(context: string, error: any) {
-  const errorDetails = {
+  const errorDetails: any = {
     context,
     message: error.message,
-    status: error.response?.status,
-    statusText: error.response?.statusText,
-    data: error.response?.data,
-    headers: error.response?.headers,
-    config: {
+  };
+  if (axios.isAxiosError(error)) {
+    errorDetails.status = error.response?.status;
+    errorDetails.statusText = error.response?.statusText;
+    errorDetails.data = error.response?.data;
+    errorDetails.responseHeaders = error.response?.headers; // Use the renamed property
+    errorDetails.config = {
       url: error.config?.url,
       method: error.config?.method,
-      headers: error.config?.headers,
-    },
-  };
+      requestHeaders: error.config?.headers, // Renamed for clarity
+    };
+  } else if (error instanceof APIError) {
+    errorDetails.statusCode = error.statusCode;
+    errorDetails.details = error.details;
+    if (error.responseHeaders)
+      errorDetails.responseHeaders = error.responseHeaders;
+  } else {
+    errorDetails.details = String(error);
+  }
   console.error(`Error in ${context}:`, JSON.stringify(errorDetails, null, 2));
 }
 
-async function getAccessToken() {
+async function getAccessToken(): Promise<string> {
   if (!process.env.INPI_USERNAME || !process.env.INPI_PASSWORD) {
     console.error(
       "INPI_USERNAME or INPI_PASSWORD environment variables are not set."
@@ -77,129 +87,119 @@ async function getAccessToken() {
     );
   }
 
-  // Return cached token if it's still valid (with 5-minute buffer)
   if (accessToken && tokenExpiry && Date.now() < tokenExpiry - 5 * 60 * 1000) {
-    console.log("Using cached access token");
+    console.log("Using cached access token and XSRF token value");
     return accessToken;
   }
 
+  accessToken = null;
+  xsrfTokenValue = null;
+  tokenExpiry = null;
+  // await cookieJar.removeAllCookies(); // Optional: Aggressively clear cookies if needed
+
+  console.log("Requesting new access token via /auth/login flow...");
+  const browserUserAgent =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
+
   try {
-    console.log("Requesting new access token...");
-
-    // Step 1: Make a preliminary request to establish session and hopefully get XSRF token.
-    // Previously, this was INPI_AUTH_URL, but it seems to require authentication itself.
-    // Trying INPI_TOKEN_URL with a GET request as it's the endpoint for the subsequent POST.
-    // Alternatively, INPI_API_BASE_URL or a specific /login or /csrf endpoint might be needed.
+    // Step 1: GET HTML login page to obtain/prime cookies, especially XSRF-TOKEN
     console.log(
-      `Attempting initial GET to ${INPI_TOKEN_URL} to obtain session/XSRF token.`
+      `Attempting initial GET to ${INPI_COOKIE_SETUP_URL} to obtain session cookies.`
     );
     try {
-      await client.get(INPI_TOKEN_URL);
-    } catch (error) {
-      // Log this error but proceed, as the main goal is to get cookies set by this attempt,
-      // even if the GET request itself doesn't return 200 (e.g., might return 405 Method Not Allowed,
-      // but could still set cookies).
-      logError("preliminaryGetToTokenUrl", error);
-    }
-
-    // Get cookies from jar - use INPI_TOKEN_URL as the domain for cookie retrieval
-    const cookies = cookieJar.getCookiesSync(INPI_TOKEN_URL);
-    const xsrfCookie = cookies.find((c: Cookie) => c.key === "XSRF-TOKEN");
-
-    if (!xsrfCookie?.value) {
-      throw new APIError("Failed to obtain CSRF token", 500, {
-        cookies: cookies.map((c: Cookie) => `${c.key}=${c.value}`),
-      });
-    }
-
-    xsrfToken = decodeURIComponent(xsrfCookie.value);
-    console.log("Extracted XSRF token:", xsrfToken);
-
-    // Intermediate Step: Call INPI_AUTH_URL with the obtained XSRF token
-    // This is to see if it "primes" or "validates" the session.
-    console.log(
-      `Attempting intermediate GET to ${INPI_AUTH_URL} with XSRF token.`
-    );
-    try {
-      const authResponse = await client.get(INPI_AUTH_URL, {
+      await client.get(INPI_COOKIE_SETUP_URL, {
         headers: {
-          "X-XSRF-TOKEN": xsrfToken,
-          // Other headers like Accept, User-Agent, Origin, Referer are part of client defaults
+          "User-Agent": browserUserAgent,
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         },
       });
-      console.log(
-        "Intermediate GET to INPI_AUTH_URL successful:",
-        authResponse.status,
-        authResponse.data
-      );
+      console.log(`Initial GET to ${INPI_COOKIE_SETUP_URL} completed.`);
     } catch (error) {
-      // Log this error but proceed, as the main goal is to see if this step influences the final POST.
-      logError("intermediateGetToAuthUrl", error);
-      // We might still want to try the POST to INPI_TOKEN_URL unless this error is definitively fatal.
+      logError("initialGetToCookieSetupUrl", error);
+      // This might not be fatal if cookies were set despite an error page.
     }
 
-    // Step 2: Get OAuth token using the XSRF token
-    const tokenResponse = await client.post(
-      INPI_TOKEN_URL,
-      new URLSearchParams({
-        grant_type: "password", // Changed from client_credentials to password
+    // Extract XSRF-TOKEN cookie value from the jar
+    const cookiesFromJar = await cookieJar.getCookies(INPI_COOKIE_SETUP_URL);
+    const xsrfCookie = cookiesFromJar.find(
+      (c: Cookie) => c.key === "XSRF-TOKEN"
+    );
+
+    if (!xsrfCookie?.value) {
+      const currentCookiesDesc =
+        cookiesFromJar
+          .map((c) => `${c.key}=${c.value}; Path=${c.path}; Domain=${c.domain}`)
+          .join("; ") || "None";
+      console.error(
+        `Cookies found for ${INPI_COOKIE_SETUP_URL} after GET: ${currentCookiesDesc}`
+      );
+      throw new APIError(
+        `Failed to obtain XSRF-TOKEN cookie after GET to ${INPI_COOKIE_SETUP_URL}.`,
+        500,
+        {
+          stage: "xsrf-cookie-extraction",
+          retrievedCookiesCount: cookiesFromJar.length,
+        }
+      );
+    }
+    xsrfTokenValue = decodeURIComponent(xsrfCookie.value);
+    console.log("Extracted XSRF-TOKEN cookie value:", xsrfTokenValue);
+
+    // Step 2: POST credentials to /auth/login (JSON payload)
+    console.log(
+      `Attempting POST to ${INPI_JSON_LOGIN_URL} with JSON payload and XSRF token.`
+    );
+    const loginResponse = await client.post(
+      INPI_JSON_LOGIN_URL,
+      {
         username: process.env.INPI_USERNAME!,
         password: process.env.INPI_PASSWORD!,
-        scope: "openid profile email marques",
-      }).toString(),
+        rememberMe: false, // As per HAR
+      },
       {
         headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "X-XSRF-TOKEN": xsrfToken,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/plain, */*", // From HAR
+          "X-XSRF-TOKEN": xsrfTokenValue,
+          Origin: INPI_API_BASE_URL,
+          Referer: INPI_COOKIE_SETUP_URL,
+          "User-Agent": browserUserAgent,
         },
       }
     );
 
-    console.log("Token response:", tokenResponse.data);
+    console.log(
+      "Login POST to INPI_JSON_LOGIN_URL successful, status:",
+      loginResponse.status
+    );
 
-    if (!tokenResponse.data.access_token) {
-      throw new APIError("No access token in response", 500, {
-        response: tokenResponse.data,
+    if (!loginResponse.data || !loginResponse.data.access_token) {
+      throw new APIError("No access_token in response from /auth/login", 500, {
+        responseData: loginResponse.data,
+        stage: "token-extraction",
       });
     }
 
-    accessToken = tokenResponse.data.access_token;
-    // Set token expiry based on expires_in from response (default to 1 hour if not provided)
-    tokenExpiry = Date.now() + (tokenResponse.data.expires_in || 3600) * 1000;
+    accessToken = loginResponse.data.access_token;
+    tokenExpiry = Date.now() + (loginResponse.data.expires_in || 3600) * 1000;
 
+    console.log("Successfully obtained access_token.");
     return accessToken;
   } catch (error: unknown) {
     logError("getAccessToken", error);
 
-    // Clear cached tokens on error
     accessToken = null;
-    xsrfToken = null;
+    xsrfTokenValue = null;
     tokenExpiry = null;
 
-    if (error instanceof APIError) {
-      throw error;
-    }
-
+    if (error instanceof APIError) throw error;
     if (axios.isAxiosError(error)) {
       const status = error.response?.status;
-      const message = error.response?.data?.error_description || error.message;
-
-      if (status === 401) {
-        throw new APIError(
-          "Authentication failed: Invalid credentials",
-          401,
-          error.response?.data,
-          error.response?.headers
-        );
-      } else if (status === 403) {
-        throw new APIError(
-          "Authentication failed: Insufficient permissions",
-          403,
-          error.response?.data,
-          error.response?.headers
-        );
-      }
-
+      const message =
+        error.response?.data?.error_description ||
+        error.response?.data?.error ||
+        error.message;
       throw new APIError(
         `Authentication failed: ${message}`,
         status || 500,
@@ -207,9 +207,8 @@ async function getAccessToken() {
         error.response?.headers
       );
     }
-
-    throw new APIError("Unexpected error during authentication", 500, {
-      error: error instanceof Error ? error.message : String(error),
+    throw new APIError("Unexpected error during authentication process", 500, {
+      errorDetails: String(error),
     });
   }
 }
@@ -225,22 +224,18 @@ export async function GET(request: Request) {
 
     if (!query) {
       return NextResponse.json(
-        {
-          error: "Search query is required",
-          code: "MISSING_QUERY",
-        },
+        { error: "Search query is required", code: "MISSING_QUERY" },
         { status: 400 }
       );
     }
 
     console.log("Searching for:", query);
-
-    // Get access token
     const token = await getAccessToken();
     console.log("Got access token, making search request...");
 
     try {
-      const response = await axios.post(
+      // Use 'client' instance for search request to ensure cookie context is maintained if needed by search endpoint
+      const response = await client.post(
         INPI_SEARCH_URL,
         {
           query,
@@ -257,115 +252,89 @@ export async function GET(request: Request) {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
             Accept: "application/json",
-            "X-XSRF-TOKEN": xsrfToken || "",
+            "X-XSRF-TOKEN": xsrfTokenValue || "", // Send XSRF token if available
+            "User-Agent": "Next.js Trademark Search App/1.0",
           },
-          withCredentials: true,
         }
       );
-
       console.log("Search response status:", response.status);
-      console.log("Search response headers:", response.headers);
-
       return NextResponse.json(response.data);
     } catch (error: unknown) {
       logError("searchRequest", error);
-
-      if (axios.isAxiosError(error)) {
-        const status = error.response?.status;
-
-        // Handle token invalidation
-        if (status === 401 || status === 403) {
-          console.log("Token invalid, clearing cache and retrying...");
-          accessToken = null;
-          xsrfToken = null;
-          tokenExpiry = null;
-
-          try {
-            const newToken = await getAccessToken();
-
-            // Retry the search with new token
-            const retryResponse = await axios.post(
-              INPI_SEARCH_URL,
-              {
-                query,
-                page: parseInt(page),
-                nbResultsPerPage: parseInt(nbResultsPerPage),
-                sort,
-                order,
-                type: "brands",
-                advancedSearch: {},
-                filter: {},
+      if (
+        axios.isAxiosError(error) &&
+        (error.response?.status === 401 || error.response?.status === 403)
+      ) {
+        console.log(
+          "Access token invalid for search, clearing cache and retrying search once..."
+        );
+        accessToken = null;
+        xsrfTokenValue = null;
+        tokenExpiry = null;
+        try {
+          const newToken = await getAccessToken();
+          const retryResponse = await client.post(
+            INPI_SEARCH_URL,
+            {
+              query,
+              page: parseInt(page),
+              nbResultsPerPage: parseInt(nbResultsPerPage),
+              sort,
+              order,
+              type: "brands",
+              advancedSearch: {},
+              filter: {},
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${newToken}`,
+                "Content-Type": "application/json",
+                Accept: "application/json",
+                "X-XSRF-TOKEN": xsrfTokenValue || "",
+                "User-Agent": "Next.js Trademark Search App/1.0",
               },
-              {
-                headers: {
-                  Authorization: `Bearer ${newToken}`,
-                  "Content-Type": "application/json",
-                  Accept: "application/json",
-                  "X-XSRF-TOKEN": xsrfToken || "", // Ensure xsrfToken is current if getAccessToken refreshed it
-                },
-                withCredentials: true,
-              }
-            );
-
-            return NextResponse.json(retryResponse.data);
-          } catch (retryError: unknown) {
-            logError("searchRetry", retryError);
-            let retryStatus = 500;
-            let retryDetails: any = {
-              message:
-                retryError instanceof Error
-                  ? retryError.message
-                  : String(retryError),
-            };
-            let retryResponseMessage =
-              "Failed to retry search after token refresh";
-
-            if (retryError instanceof APIError) {
-              retryStatus = retryError.statusCode;
-              retryDetails = retryError.details || retryDetails;
-              retryResponseMessage = `Failed to retry search: ${retryError.message}`;
-            } else if (axios.isAxiosError(retryError)) {
-              retryStatus = retryError.response?.status || 500;
-              retryDetails = retryError.response?.data || retryDetails;
-              retryResponseMessage = `Failed to retry search: ${retryError.message}`;
             }
-
-            throw new APIError(retryResponseMessage, retryStatus, {
-              originalError: {
-                message: error.message,
-                status: error.response?.status,
-                data: error.response?.data,
-              },
-              retryError: {
-                message:
-                  retryError instanceof Error
-                    ? retryError.message
-                    : String(retryError),
-                status: retryStatus, // This is the status of the retry attempt error
-                data: retryDetails,
-              },
-            });
+          );
+          console.log("Search retry successful.");
+          return NextResponse.json(retryResponse.data);
+        } catch (retryError: unknown) {
+          logError("searchRetry", retryError);
+          let rStatus = 500;
+          let rDetails: any = {};
+          if (retryError instanceof APIError) {
+            rStatus = retryError.statusCode;
+            rDetails = retryError.details;
+          } else if (axios.isAxiosError(retryError)) {
+            rStatus = retryError.response?.status || 500;
+            rDetails = retryError.response?.data;
           }
+          throw new APIError(
+            `Failed to retry search: ${
+              retryError instanceof Error
+                ? retryError.message
+                : String(retryError)
+            }`,
+            rStatus,
+            {
+              originalSearchError: { message: (error as Error).message },
+              retryAttemptError: { data: rDetails },
+            }
+          );
         }
-
-        // Handle other API errors
-        const message =
-          error.response?.data?.error_description || error.message;
+      }
+      if (axios.isAxiosError(error))
         throw new APIError(
-          `Search failed: ${message}`,
-          status || 500,
+          `Search failed: ${error.message}`,
+          error.response?.status || 500,
           error.response?.data,
           error.response?.headers
         );
-      }
-
       throw new APIError("Unexpected error during search", 500, {
-        error: error instanceof Error ? error.message : String(error),
+        errorDetails: String(error),
       });
     }
   } catch (error: unknown) {
-    logError("searchRoute", error);
-
+    logError("searchRouteHandler", error);
     if (error instanceof APIError) {
       return NextResponse.json(
         {
@@ -382,10 +351,9 @@ export async function GET(request: Request) {
         { status: error.statusCode }
       );
     }
-
     return NextResponse.json(
       {
-        error: "Failed to search trademarks",
+        error: "An unexpected internal error occurred.",
         code: "INTERNAL_ERROR",
         details: error instanceof Error ? error.message : String(error),
         timestamp: new Date().toISOString(),
