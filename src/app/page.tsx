@@ -13,12 +13,12 @@ import { z } from 'zod';
 // Types for the trademark search results
 const trademarkSchema = z.object({
   marque: z.string(),
-  dateDepot: z.string(), // Corresponds to PublicationDate or RegistrationDate from INPI
-  produitsServices: z.string(), // Corresponds to NiceClassDetails (needs parsing if complex)
-  origine: z.string(), // Derived from ApplicationNumber prefix or a specific field if available
-  statut: z.string(), // Corresponds to MarkCurrentStatusCode
-  noticeUrl: z.string().optional(), // From item.xml.href
-  applicationNumber: z.string().optional(), // Added for completeness
+  dateDepot: z.string(),
+  produitsServices: z.string(),
+  origine: z.string(),
+  statut: z.string(),
+  noticeUrl: z.string().optional(),
+  applicationNumber: z.string().optional(),
 });
 
 type Trademark = z.infer<typeof trademarkSchema>;
@@ -33,18 +33,32 @@ function findFieldValue(
   }
   const field = fields.find(f => f.name === fieldName);
   if (field) {
-    // If 'values' array exists and has items, join them. Otherwise, use 'value'.
     if (Array.isArray(field.values) && field.values.length > 0) {
-      return field.values.join(', ');
+      return field.values.join(', '); // Default join for multiple values, might need adjustment
     }
     return field.value;
   }
   return undefined;
 }
 
+// Helper to format YYYYMMDD date string to DD/MM/YYYY
+function formatDateDisplay(yyyymmddStr?: string): string {
+  if (!yyyymmddStr || yyyymmddStr.length !== 8) {
+    return 'N/A';
+  }
+  const year = yyyymmddStr.substring(0, 4);
+  const month = yyyymmddStr.substring(4, 6);
+  const day = yyyymmddStr.substring(6, 8);
+  if (isNaN(parseInt(year)) || isNaN(parseInt(month)) || isNaN(parseInt(day))) {
+    return 'N/A'; // Invalid date components
+  }
+  return `${day}/${month}/${year}`;
+}
+
+
 // API function to search trademarks
 async function searchTrademarks(query: string): Promise<Trademark[]> {
-  if (!query.trim()) { // Prevent fetch if query is empty or just whitespace
+  if (!query.trim()) {
     console.log("Frontend: Empty query, not fetching.");
     return [];
   }
@@ -54,10 +68,7 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
   const rawData = await response.json();
   
   if (!response.ok) {
-    console.error('Frontend: Search API call failed:', {
-      status: response.status,
-      data: rawData,
-    });
+    console.error('Frontend: Search API call failed:', { status: response.status, data: rawData });
     throw new Error(rawData.details || rawData.error || 'Failed to fetch trademarks from backend API');
   }
   
@@ -67,49 +78,69 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
     const mappedResults: Trademark[] = rawData.results.map((item: any) => {
       const fieldsArray = Array.isArray(item.fields) ? item.fields : [];
 
-      // Determine 'origine' - example: from ApplicationNumber prefix if it's like 'FR', 'EU', 'WO'
       let origine = 'N/A';
-      const appNum = findFieldValue(fieldsArray, 'ApplicationNumber');
-      if (appNum) {
-        if (appNum.startsWith('FR')) origine = 'FR';
-        else if (appNum.startsWith('EU') || item.ukey?.startsWith('CTMARK')) origine = 'EU';
-        else if (appNum.startsWith('WO') || item.ukey?.startsWith('TMINT')) origine = 'WO';
+      const ukey = findFieldValue(fieldsArray, 'ukey');
+      if (ukey) {
+        if (ukey.startsWith('FMARK')) origine = 'FR';
+        else if (ukey.startsWith('CTMARK')) origine = 'EU';
+        else if (ukey.startsWith('TMINT')) origine = 'WO';
       }
-      if (item.ukey?.startsWith('FMARK')) origine = 'FR';
+      if (origine === 'N/A') {
+          const appNumForOrigin = findFieldValue(fieldsArray, 'ApplicationNumber');
+          if (appNumForOrigin) {
+               if (appNumForOrigin.length > 2 && /^[A-Z]{2}/.test(appNumForOrigin.substring(0,2))) {
+                   const prefix = appNumForOrigin.substring(0,2);
+                   if (prefix === 'FR') origine = 'FR';
+                   else if (prefix === 'EU') origine = 'EU';
+                   else if (prefix === 'WO') origine = 'WO';
+               } else if (appNumForOrigin.startsWith('0')) {
+                   origine = 'EU';
+               }
+          }
+      }
 
-
-      // NiceClassDetails might be complex, joining for now if it's an array of strings,
-      // or needs more specific parsing if it's an array of objects.
-      // For simplicity, if NiceClassDetails is an object, we might stringify it or extract key parts.
-      let produitsServicesText = findFieldValue(fieldsArray, 'NiceClassDetails') || 'N/A';
+      let produitsServicesText = 'N/A';
       const niceClassField = fieldsArray.find(f => f.name === 'NiceClassDetails');
-      if (typeof niceClassField?.value === 'object' && niceClassField.value !== null) {
-         // Attempt to extract class numbers if it's an object/array of objects
-        try {
-            const niceClasses = JSON.parse(JSON.stringify(niceClassField.value)); // Deep clone to be safe
+      if (niceClassField) {
+        // Attempt to parse NiceClassDetails if it exists
+        // This part remains speculative as we haven't seen its live structure
+        if (typeof niceClassField.value === 'object' && niceClassField.value !== null) {
+          try {
+            const niceClasses = JSON.parse(JSON.stringify(niceClassField.value));
             if (Array.isArray(niceClasses)) {
-                produitsServicesText = niceClasses.map(nc => `Class ${nc.classNumber}: ${nc.classDescription?.descriptionText || ''}`).join('; ');
+                produitsServicesText = niceClasses.map(nc => `Class ${nc.classNumber || '?'}: ${nc.classDescription?.descriptionText || (nc.text || '')}`).join('; ') || 'N/A';
             } else if (typeof niceClasses === 'object' && niceClasses.classNumber) {
-                 produitsServicesText = `Class ${niceClasses.classNumber}: ${niceClasses.classDescription?.descriptionText || ''}`;
+                 produitsServicesText = `Class ${niceClasses.classNumber}: ${niceClasses.classDescription?.descriptionText || (niceClasses.text || '')}` || 'N/A';
             } else {
                 produitsServicesText = JSON.stringify(niceClassField.value);
             }
-        } catch(e) {
-            produitsServicesText = "Error parsing Nice classes";
+          } catch(e) {
+              produitsServicesText = "Error parsing Nice classes";
+          }
+        } else if (niceClassField.value) { // If it's a simple string value
+            produitsServicesText = niceClassField.value;
+        } else if (Array.isArray(niceClassField.values) && niceClassField.values.length > 0) { // If it's an array of strings
+            produitsServicesText = niceClassField.values.join(', ');
         }
-      } else if (typeof niceClassField?.values !== 'undefined') { // If it's an array of strings (less likely for complex data)
-        produitsServicesText = (niceClassField.values || []).join(', ');
       }
 
 
+      let rawDateToFormat = findFieldValue(fieldsArray, 'RegistrationDate');
+      if (!rawDateToFormat) {
+        const pubDatesField = fieldsArray.find(f => f.name === 'PublicationDate');
+        if (pubDatesField && Array.isArray(pubDatesField.values) && pubDatesField.values.length > 0) {
+          rawDateToFormat = pubDatesField.values[0]; // Use the first publication date
+        }
+      }
+
       return {
         marque: findFieldValue(fieldsArray, 'Mark') || 'N/A',
-        dateDepot: findFieldValue(fieldsArray, 'RegistrationDate') || findFieldValue(fieldsArray, 'PublicationDate') || 'N/A',
+        dateDepot: formatDateDisplay(rawDateToFormat),
         produitsServices: produitsServicesText,
         origine: origine,
         statut: findFieldValue(fieldsArray, 'MarkCurrentStatusCode') || 'N/A',
         noticeUrl: item.xml?.href,
-        applicationNumber: appNum || undefined,
+        applicationNumber: findFieldValue(fieldsArray, 'ApplicationNumber') || undefined,
       };
     });
     console.log("Frontend: Mapped results:", mappedResults);
@@ -122,13 +153,12 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
 
 export default function TrademarkSearch() {
   const [searchQuery, setSearchQuery] = useState('');
-  const [submittedQuery, setSubmittedQuery] = useState(''); // To trigger query only on submit
+  const [submittedQuery, setSubmittedQuery] = useState('');
 
-  // useQuery will now depend on submittedQuery
   const { data: trademarks, isLoading, error, refetch, isFetching } = useQuery<Trademark[], Error>({
-    queryKey: ['trademarks', submittedQuery], // Use submittedQuery for the queryKey
+    queryKey: ['trademarks', submittedQuery],
     queryFn: () => searchTrademarks(submittedQuery),
-    enabled: !!submittedQuery, // Enable only when submittedQuery is not empty
+    enabled: !!submittedQuery,
     retry: 1,
   });
 
@@ -144,7 +174,7 @@ export default function TrademarkSearch() {
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
-      e.preventDefault(); // Prevent form submission if it's in a form
+      e.preventDefault();
       handleSearch();
     }
   };
@@ -169,7 +199,7 @@ export default function TrademarkSearch() {
       </div>
 
       <ScrollArea className="h-[600px] rounded-md border p-4">
-        {(isLoading || isFetching) && submittedQuery ? ( // Show skeletons only if a search is active
+        {(isLoading || isFetching) && submittedQuery ? (
           <div className="space-y-4">
             {[...Array(3)].map((_, i) => (
               <Skeleton key={i} className="h-32 w-full" />
@@ -191,7 +221,7 @@ export default function TrademarkSearch() {
         ) : trademarks && trademarks.length > 0 ? (
           <div className="space-y-4">
             {trademarks.map((trademark: Trademark, index: number) => (
-              <Card key={`${trademark.applicationNumber}-${index}`} className="p-4"> {/* Use a more unique key */}
+              <Card key={`${trademark.applicationNumber}-${index}`} className="p-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <h3 className="font-semibold">Marque</h3>
@@ -222,7 +252,7 @@ export default function TrademarkSearch() {
                   {trademark.noticeUrl && (
                     <div className="md:col-span-2">
                        <Button
-                        variant="link" // Changed to link for less emphasis, or keep as outline
+                        variant="link"
                         className="p-0 h-auto text-blue-600 hover:underline"
                         onClick={() => window.open(trademark.noticeUrl, '_blank')}
                       >
@@ -234,7 +264,7 @@ export default function TrademarkSearch() {
               </Card>
             ))}
           </div>
-        ) : submittedQuery && !isLoading && !isFetching ? ( // Show "No results" only after a search has been submitted and is not loading
+        ) : submittedQuery && !isLoading && !isFetching ? (
           <div className="text-center p-4 text-gray-500">
             No results found for "{submittedQuery}". Try a different search term.
           </div>
