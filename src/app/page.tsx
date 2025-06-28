@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, KeyboardEvent, ChangeEvent } from 'react';
+import { useRouter } from 'next/navigation'; // Import useRouter
 import { Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,13 +18,14 @@ const trademarkSchema = z.object({
   produitsServices: z.string(),
   origine: z.string(),
   statut: z.string(),
-  noticeUrl: z.string().optional(),
-  applicationNumber: z.string().optional(),
+  noticeUrl: z.string().optional(), // URL to the INPI XML notice e.g. .../notice/EU13333497
+  applicationNumber: z.string().optional(), // The numeric part or prefixed part
+  // documentId might be more consistent for routing if it includes prefix
+  // For now, we'll derive the ID for the detail page from noticeUrl
 });
 
 type Trademark = z.infer<typeof trademarkSchema>;
 
-// Helper to find a field value from INPI's fields array
 function findFieldValue(
   fields: Array<{name: string, value?: string, values?: string[]}> | undefined,
   fieldName: string
@@ -34,14 +36,15 @@ function findFieldValue(
   const field = fields.find(f => f.name === fieldName);
   if (field) {
     if (Array.isArray(field.values) && field.values.length > 0) {
-      return field.values.join(', '); // Default join for multiple values, might need adjustment
+      // For PublicationDate, we want the first one. For DEPOSANT, join them.
+      if (fieldName === 'PublicationDate') return field.values[0];
+      return field.values.join(', ');
     }
     return field.value;
   }
   return undefined;
 }
 
-// Helper to format YYYYMMDD date string to DD/MM/YYYY
 function formatDateDisplay(yyyymmddStr?: string): string {
   if (!yyyymmddStr || yyyymmddStr.length !== 8) {
     return 'N/A';
@@ -50,13 +53,11 @@ function formatDateDisplay(yyyymmddStr?: string): string {
   const month = yyyymmddStr.substring(4, 6);
   const day = yyyymmddStr.substring(6, 8);
   if (isNaN(parseInt(year)) || isNaN(parseInt(month)) || isNaN(parseInt(day))) {
-    return 'N/A'; // Invalid date components
+    return 'N/A';
   }
   return `${day}/${month}/${year}`;
 }
 
-
-// API function to search trademarks
 async function searchTrademarks(query: string): Promise<Trademark[]> {
   if (!query.trim()) {
     console.log("Frontend: Empty query, not fetching.");
@@ -89,7 +90,7 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
           const appNumForOrigin = findFieldValue(fieldsArray, 'ApplicationNumber');
           if (appNumForOrigin) {
                if (appNumForOrigin.length > 2 && /^[A-Z]{2}/.test(appNumForOrigin.substring(0,2))) {
-                   const prefix = appNumForOrigin.substring(0,2);
+                   const prefix = appNumForOrigin.substring(0,2).toUpperCase();
                    if (prefix === 'FR') origine = 'FR';
                    else if (prefix === 'EU') origine = 'EU';
                    else if (prefix === 'WO') origine = 'WO';
@@ -102,11 +103,9 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
       let produitsServicesText = 'N/A';
       const niceClassField = fieldsArray.find(f => f.name === 'NiceClassDetails');
       if (niceClassField) {
-        // Attempt to parse NiceClassDetails if it exists
-        // This part remains speculative as we haven't seen its live structure
         if (typeof niceClassField.value === 'object' && niceClassField.value !== null) {
           try {
-            const niceClasses = JSON.parse(JSON.stringify(niceClassField.value));
+            const niceClasses = niceClassField.value; // Assuming it's already an object/array
             if (Array.isArray(niceClasses)) {
                 produitsServicesText = niceClasses.map(nc => `Class ${nc.classNumber || '?'}: ${nc.classDescription?.descriptionText || (nc.text || '')}`).join('; ') || 'N/A';
             } else if (typeof niceClasses === 'object' && niceClasses.classNumber) {
@@ -117,19 +116,21 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
           } catch(e) {
               produitsServicesText = "Error parsing Nice classes";
           }
-        } else if (niceClassField.value) { // If it's a simple string value
+        } else if (niceClassField.value) {
             produitsServicesText = niceClassField.value;
-        } else if (Array.isArray(niceClassField.values) && niceClassField.values.length > 0) { // If it's an array of strings
+        } else if (Array.isArray(niceClassField.values) && niceClassField.values.length > 0) {
             produitsServicesText = niceClassField.values.join(', ');
         }
       }
 
-
       let rawDateToFormat = findFieldValue(fieldsArray, 'RegistrationDate');
       if (!rawDateToFormat) {
-        const pubDatesField = fieldsArray.find(f => f.name === 'PublicationDate');
-        if (pubDatesField && Array.isArray(pubDatesField.values) && pubDatesField.values.length > 0) {
-          rawDateToFormat = pubDatesField.values[0]; // Use the first publication date
+        // findFieldValue for PublicationDate needs to be adjusted to return first value if it's an array
+        const pubDateField = fieldsArray.find(f => f.name === 'PublicationDate');
+        if (pubDateField && Array.isArray(pubDateField.values) && pubDateField.values.length > 0) {
+          rawDateToFormat = pubDateField.values[0];
+        } else if (pubDateField && pubDateField.value) {
+          rawDateToFormat = pubDateField.value;
         }
       }
 
@@ -139,7 +140,7 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
         produitsServices: produitsServicesText,
         origine: origine,
         statut: findFieldValue(fieldsArray, 'MarkCurrentStatusCode') || 'N/A',
-        noticeUrl: item.xml?.href,
+        noticeUrl: item.xml?.href, // This contains the full ID like EU13333497
         applicationNumber: findFieldValue(fieldsArray, 'ApplicationNumber') || undefined,
       };
     });
@@ -154,6 +155,7 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
 export default function TrademarkSearch() {
   const [searchQuery, setSearchQuery] = useState('');
   const [submittedQuery, setSubmittedQuery] = useState('');
+  const router = useRouter(); // Initialize router
 
   const { data: trademarks, isLoading, error, refetch, isFetching } = useQuery<Trademark[], Error>({
     queryKey: ['trademarks', submittedQuery],
@@ -176,6 +178,18 @@ export default function TrademarkSearch() {
     if (e.key === 'Enter') {
       e.preventDefault();
       handleSearch();
+    }
+  };
+
+  const handleViewNotice = (noticeUrl?: string) => {
+    if (noticeUrl) {
+      const parts = noticeUrl.split('/');
+      const noticeId = parts[parts.length - 1]; // Extracts "EU13333497" or "FR123456"
+      if (noticeId) {
+        router.push(`/trademarkDetails/${noticeId}`);
+      } else {
+        console.error("Could not extract noticeId from URL:", noticeUrl);
+      }
     }
   };
 
@@ -221,7 +235,7 @@ export default function TrademarkSearch() {
         ) : trademarks && trademarks.length > 0 ? (
           <div className="space-y-4">
             {trademarks.map((trademark: Trademark, index: number) => (
-              <Card key={`${trademark.applicationNumber}-${index}`} className="p-4">
+              <Card key={`${trademark.applicationNumber}-${index}-${trademark.marque}`} className="p-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <h3 className="font-semibold">Marque</h3>
@@ -254,7 +268,7 @@ export default function TrademarkSearch() {
                        <Button
                         variant="link"
                         className="p-0 h-auto text-blue-600 hover:underline"
-                        onClick={() => window.open(trademark.noticeUrl, '_blank')}
+                        onClick={() => handleViewNotice(trademark.noticeUrl)}
                       >
                         Voir la notice complète (INPI)
                       </Button>
