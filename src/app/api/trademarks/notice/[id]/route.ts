@@ -14,10 +14,10 @@ import axios from "axios"; // For AxiosError type checking
 
 const INPI_API_BASE_URL = "https://api-gateway.inpi.fr";
 
-export async function GET(request: Request, context: { params: { id: string } }) {
+export async function GET(request: Request, { params }: { params: { id: string } }) {
   // To address the "params should be awaited" warning, ensure context.params is accessed correctly.
   // For Route Handlers, context.params is directly available.
-  const id = context.params.id;
+  const id = params.id;
 
   if (!id) {
     return NextResponse.json({ error: "Trademark ID is required." }, { status: 400 });

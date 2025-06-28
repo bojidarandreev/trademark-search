@@ -226,10 +226,10 @@ export default function TrademarkDetailPage() {
           <CardTitle>Détails de la Marque : {markText ? markText : 'N/A (markText empty)'}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          {noticeData.MarkImageDetails?.MarkImage?.MarkImageFilename && (
+          {noticeData.MarkImageDetails?.MarkImage?.MarkImageFilename && id && (
             <div className="my-4 text-center">
               <img
-                src={`https://api-gateway.inpi.fr/services/apidiffusion/api/marques/image/${id}/std`}
+                src={`/api/trademark-image/${id}`}
                 alt={`Logo for ${noticeData.WordMarkSpecification?.MarkVerbalElementText || 'trademark'}`}
                 className="inline-block border max-h-40"
               />
