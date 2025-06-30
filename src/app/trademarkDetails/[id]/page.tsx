@@ -167,18 +167,31 @@ export default function TrademarkDetailPage() {
       return <p>N/A</p>;
     }
 
-    let classEntries = goodsServicesContainer.ClassDescriptionDetails.ClassDescription;
-    if (!Array.isArray(classEntries)) classEntries = [classEntries];
+    let classes = goodsServicesContainer.ClassDescriptionDetails.ClassDescription;
+    if (!Array.isArray(classes)) classes = [classes];
 
-    const classNumbers = classEntries
-      .map((cd: any) => cd.ClassNumber)
-      .filter((cn: any) => cn !== null && cn !== undefined && cn !== '');
-
-    if (classNumbers.length === 0) {
-      return <p>Classes: N/A</p>;
-    }
-
-    return <p>Classes: {classNumbers.join(', ')}</p>;
+    return (
+      <ul className="list-disc list-inside space-y-2">
+        {classes.map((cd: any, index: number) => {
+          let descriptions: string[] = [];
+          if (cd.GoodsServicesDescription) {
+            const descArray = Array.isArray(cd.GoodsServicesDescription) ? cd.GoodsServicesDescription : [cd.GoodsServicesDescription];
+            descriptions = descArray.map((descEntry: any) => {
+              // descEntry could be a string directly, or an object with _text
+              if (typeof descEntry === 'string') return descEntry;
+              if (descEntry && typeof descEntry._text === 'string') return descEntry._text;
+              return '';
+            }).filter(Boolean);
+          }
+          return (
+            <li key={index}>
+              <strong>Classe {cd.ClassNumber || 'N/A'}:</strong>
+              <div className="pl-2 whitespace-pre-line">{descriptions.join('; ') || 'No description'}</div>
+            </li>
+          );
+        })}
+      </ul>
+    );
   };
 
   // Conditional rendering logic
