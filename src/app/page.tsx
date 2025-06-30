@@ -105,16 +105,40 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
       if (niceClassField) {
         if (typeof niceClassField.value === 'object' && niceClassField.value !== null) {
           try {
-            const niceClasses = niceClassField.value; // Assuming it's already an object/array
-            if (Array.isArray(niceClasses)) {
-                produitsServicesText = niceClasses.map(nc => `Class ${nc.classNumber || '?'}: ${nc.classDescription?.descriptionText || (nc.text || '')}`).join('; ') || 'N/A';
-            } else if (typeof niceClasses === 'object' && niceClasses.classNumber) {
-                 produitsServicesText = `Class ${niceClasses.classNumber}: ${niceClasses.classDescription?.descriptionText || (niceClasses.text || '')}` || 'N/A';
-            } else {
-                produitsServicesText = JSON.stringify(niceClassField.value);
-            }
+            const niceClassesInput = niceClassField.value;
+            if (Array.isArray(niceClassesInput)) {
+                const classNumbers = niceClassesInput
+                  .map((nc: any) => nc.classNumber)
+                  .filter((cn: any) => cn !== null && cn !== undefined && cn !== '')
+                  .sort((a: string, b: string) => {
+                    const numA = parseInt(a, 10);
+                    const numB = parseInt(b, 10);
+                    if (isNaN(numA) && isNaN(numB)) return 0;
+                    if (isNaN(numA)) return 1; // Put non-numeric last
+                    if (isNaN(numB)) return -1; // Put non-numeric last
+                    return numA - numB;
+                  });
+
+                if (classNumbers.length > 0) {
+                  produitsServicesText = `Classes: ${classNumbers.join(', ')}`;
+                } else {
+                  // produitsServicesText remains 'N/A' (default) or we can set 'Classes: N/A'
+                  // Keeping 'N/A' if no numbers found for cleaner fallback.
+                }
+            } else if (typeof niceClassesInput === 'object' && niceClassesInput.classNumber) {
+                 if (niceClassesInput.classNumber) {
+                    produitsServicesText = `Classes: ${niceClassesInput.classNumber}`;
+                 } // else produitsServicesText remains 'N/A'
+            } else if (typeof niceClassesInput === 'string' && niceClassesInput.trim() !== '') {
+                // If it's a pre-formatted string, use it directly.
+                // This might happen if the API sometimes returns it differently.
+                produitsServicesText = niceClassesInput;
+            } else if (niceClassesInput) { // Catch other non-null, non-array, non-object-with-classNumber cases
+                produitsServicesText = JSON.stringify(niceClassesInput);
+            } // else produitsServicesText remains 'N/A'
           } catch(e) {
-              produitsServicesText = "Error parsing Nice classes";
+              console.error("Error parsing Nice classes in search results:", e);
+              produitsServicesText = "Error parsing classes"; // More specific error
           }
         } else if (niceClassField.value) {
             produitsServicesText = niceClassField.value;
