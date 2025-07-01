@@ -101,51 +101,32 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
       }
 
       let produitsServicesText = 'N/A';
-      const niceClassField = fieldsArray.find(f => f.name === 'NiceClassDetails');
-      if (niceClassField) {
-        if (typeof niceClassField.value === 'object' && niceClassField.value !== null) {
-          try {
-            const niceClassesInput = niceClassField.value;
-            if (Array.isArray(niceClassesInput)) {
-                const classNumbers = niceClassesInput
-                  .map((nc: any) => nc.classNumber)
-                  .filter((cn: any) => cn !== null && cn !== undefined && cn !== '')
-                  .sort((a: string, b: string) => {
-                    const numA = parseInt(a, 10);
-                    const numB = parseInt(b, 10);
-                    if (isNaN(numA) && isNaN(numB)) return 0;
-                    if (isNaN(numA)) return 1; // Put non-numeric last
-                    if (isNaN(numB)) return -1; // Put non-numeric last
-                    return numA - numB;
-                  });
+      // As confirmed by logs, niceClassField is undefined in search results from INPI.
+      // The INPI search API does not seem to provide 'NiceClassDetails' in the general search results list.
+      // Therefore, 'produitsServicesText' will remain 'N/A' unless a different field containing this info is identified.
+      // The previous complex parsing logic for NiceClassDetails is removed as the field isn't available here.
 
-                if (classNumbers.length > 0) {
-                  produitsServicesText = `Classes: ${classNumbers.join(', ')}`;
-                } else {
-                  // produitsServicesText remains 'N/A' (default) or we can set 'Classes: N/A'
-                  // Keeping 'N/A' if no numbers found for cleaner fallback.
-                }
-            } else if (typeof niceClassesInput === 'object' && niceClassesInput.classNumber) {
-                 if (niceClassesInput.classNumber) {
-                    produitsServicesText = `Classes: ${niceClassesInput.classNumber}`;
-                 } // else produitsServicesText remains 'N/A'
-            } else if (typeof niceClassesInput === 'string' && niceClassesInput.trim() !== '') {
-                // If it's a pre-formatted string, use it directly.
-                // This might happen if the API sometimes returns it differently.
-                produitsServicesText = niceClassesInput;
-            } else if (niceClassesInput) { // Catch other non-null, non-array, non-object-with-classNumber cases
-                produitsServicesText = JSON.stringify(niceClassesInput);
-            } // else produitsServicesText remains 'N/A'
-          } catch(e) {
-              console.error("Error parsing Nice classes in search results:", e);
-              produitsServicesText = "Error parsing classes"; // More specific error
-          }
-        } else if (niceClassField.value) {
+      const niceClassField = fieldsArray.find(f => f.name === 'NiceClassDetails');
+      if (niceClassField && niceClassField.value) {
+        // This block will likely not be hit if NiceClassDetails is never in search results.
+        // If INPI ever starts sending it, or if it's under a different name that this find might catch,
+        // this provides a very basic fallback. A more robust parsing would be needed if the structure is complex.
+        if (typeof niceClassField.value === 'string') {
             produitsServicesText = niceClassField.value;
-        } else if (Array.isArray(niceClassField.values) && niceClassField.values.length > 0) {
-            produitsServicesText = niceClassField.values.join(', ');
+        } else if (Array.isArray(niceClassField.value) && niceClassField.value.length > 0) {
+            produitsServicesText = niceClassField.value.join(', ');
+        } else if (typeof niceClassField.value === 'object') {
+            // Attempt a simple stringification if it's an object, for debugging/visibility
+            // This is not expected to produce user-friendly class numbers without specific parsing.
+            produitsServicesText = JSON.stringify(niceClassField.value);
         }
       }
+      // If a specific field for simple class numbers list (e.g., "NiceClassNumbers_fr") were available,
+      // we would parse it here. For example:
+      // const classNumbersField = fieldsArray.find(f => f.name === 'NiceClassNumbers_fr');
+      // if (classNumbersField && classNumbersField.value) {
+      //   produitsServicesText = `Classes: ${classNumbersField.value}`;
+      // }
 
       let rawDateToFormat = findFieldValue(fieldsArray, 'RegistrationDate');
       if (!rawDateToFormat) {
