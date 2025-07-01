@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, KeyboardEvent, ChangeEvent } from "react";
-import { useRouter } from "next/navigation"; // Import useRouter
+import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,17 +11,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
-// Types for the trademark search results
+// Types for the trademark search results (assuming same structure for now)
 const trademarkSchema = z.object({
   marque: z.string(),
   dateDepot: z.string(),
   produitsServices: z.string(),
   origine: z.string(),
   statut: z.string(),
-  noticeUrl: z.string().optional(), // URL to the INPI XML notice e.g. .../notice/EU13333497
-  applicationNumber: z.string().optional(), // The numeric part or prefixed part
-  // documentId might be more consistent for routing if it includes prefix
-  // For now, we'll derive the ID for the detail page from noticeUrl
+  noticeUrl: z.string().optional(),
+  applicationNumber: z.string().optional(),
 });
 
 type Trademark = z.infer<typeof trademarkSchema>;
@@ -38,7 +36,6 @@ function findFieldValue(
   const field = fields.find((f) => f.name === fieldName);
   if (field) {
     if (Array.isArray(field.values) && field.values.length > 0) {
-      // For PublicationDate, we want the first one. For DEPOSANT, join them.
       if (fieldName === "PublicationDate") return field.values[0];
       return field.values.join(", ");
     }
@@ -60,35 +57,44 @@ function formatDateDisplay(yyyymmddStr?: string): string {
   return `${day}/${month}/${year}`;
 }
 
-async function searchTrademarks(query: string): Promise<Trademark[]> {
+async function searchTrademarksV2(query: string): Promise<Trademark[]> {
   if (!query.trim()) {
-    console.log("Frontend: Empty query, not fetching.");
+    console.log("Frontend V2 Test Page: Empty query, not fetching.");
     return [];
   }
 
-  console.log(`Frontend: Fetching /api/trademarks/search?q=${query}`);
+  console.log(
+    `Frontend V2 Test Page: Fetching /api/trademarks/searchV2?q=${query}`
+  );
   const response = await fetch(
-    `/api/trademarks/search?q=${encodeURIComponent(query)}`
+    `/api/trademarks/searchV2?q=${encodeURIComponent(query)}`
   );
   const rawData = await response.json();
 
   if (!response.ok) {
-    console.error("Frontend: Search API call failed:", {
+    console.error("Frontend V2 Test Page: Search API call failed:", {
       status: response.status,
       data: rawData,
     });
     throw new Error(
       rawData.details ||
         rawData.error ||
-        "Failed to fetch trademarks from backend API"
+        "Failed to fetch trademarks from backend V2 API"
     );
   }
 
-  console.log("Frontend: Raw data received from backend API:", rawData);
+  console.log(
+    "Frontend V2 Test Page: Raw data received from backend API:",
+    JSON.stringify(rawData, null, 2)
+  );
 
   if (rawData && Array.isArray(rawData.results)) {
     const mappedResults: Trademark[] = rawData.results.map((item: any) => {
       const fieldsArray = Array.isArray(item.fields) ? item.fields : [];
+      console.log(
+        `Frontend V2 Test Page: Processing item with fieldsArray:`,
+        JSON.stringify(fieldsArray, null, 2)
+      );
 
       let origine = "N/A";
       const ukey = findFieldValue(fieldsArray, "ukey");
@@ -122,88 +128,81 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
         (f) => f.name === "NiceClassDetails"
       );
       console.log(
-        "Frontend Search: Found niceClassField:",
+        "Frontend V2 Test Page: niceClassField object found:",
         JSON.stringify(niceClassField, null, 2)
-      ); // Log the whole field
+      );
 
-      if (niceClassField) {
+      if (niceClassField && typeof niceClassField.value !== "undefined") {
         console.log(
-          "Frontend Search: niceClassField.value type:",
+          "Frontend V2 Test Page: niceClassField.value type:",
           typeof niceClassField.value
         );
         console.log(
-          "Frontend Search: niceClassField.value content:",
+          "Frontend V2 Test Page: niceClassField.value content:",
           JSON.stringify(niceClassField.value, null, 2)
-        ); // Log the value
+        );
 
-        if (
-          typeof niceClassField.value === "object" &&
-          niceClassField.value !== null
-        ) {
+        const valueToParse = niceClassField.value;
+        if (typeof valueToParse === "string") {
           try {
-            const niceClassesInput = niceClassField.value;
-            console.log(
-              "Frontend Search: Processing niceClassesInput (object):",
-              JSON.stringify(niceClassesInput, null, 2)
-            );
-
-            if (Array.isArray(niceClassesInput)) {
-              console.log("Frontend Search: niceClassesInput is an array.");
-              const classNumbers = niceClassesInput
-                .map((nc: any) => nc.classNumber)
-                .filter(
-                  (cn: any) => cn !== null && cn !== undefined && cn !== ""
-                )
-                .sort((a: string, b: string) => {
-                  const numA = parseInt(a, 10);
-                  const numB = parseInt(b, 10);
-                  if (isNaN(numA) && isNaN(numB)) return 0;
-                  if (isNaN(numA)) return 1; // Put non-numeric last
-                  if (isNaN(numB)) return -1; // Put non-numeric last
-                  return numA - numB;
-                });
-
-              if (classNumbers.length > 0) {
+            const parsed = JSON.parse(valueToParse); // If value is a JSON string
+            if (Array.isArray(parsed)) {
+              const classNumbers = parsed
+                .map((nc: any) => nc.classNumber || nc.ClassNumber) // Check for different casings
+                .filter((cn: any) => cn)
+                .sort(
+                  (a: string, b: string) => parseInt(a, 10) - parseInt(b, 10)
+                );
+              if (classNumbers.length > 0)
                 produitsServicesText = `Classes: ${classNumbers.join(", ")}`;
-              } else {
-                // produitsServicesText remains 'N/A' (default) or we can set 'Classes: N/A'
-                // Keeping 'N/A' if no numbers found for cleaner fallback.
-              }
-            } else if (
-              typeof niceClassesInput === "object" &&
-              niceClassesInput.classNumber
-            ) {
-              if (niceClassesInput.classNumber) {
-                produitsServicesText = `Classes: ${niceClassesInput.classNumber}`;
-              } // else produitsServicesText remains 'N/A'
-            } else if (
-              typeof niceClassesInput === "string" &&
-              niceClassesInput.trim() !== ""
-            ) {
-              // If it's a pre-formatted string, use it directly.
-              // This might happen if the API sometimes returns it differently.
-              produitsServicesText = niceClassesInput;
-            } else if (niceClassesInput) {
-              // Catch other non-null, non-array, non-object-with-classNumber cases
-              produitsServicesText = JSON.stringify(niceClassesInput);
-            } // else produitsServicesText remains 'N/A'
+              else produitsServicesText = "Classes: N/A (parsed empty array)";
+            } else {
+              produitsServicesText = `Classes: ${valueToParse} (string, not JSON array)`;
+            }
           } catch (e) {
-            console.error("Error parsing Nice classes in search results:", e);
-            produitsServicesText = "Error parsing classes"; // More specific error
+            produitsServicesText = `Classes: ${valueToParse} (string, not valid JSON)`;
           }
-        } else if (niceClassField.value) {
-          produitsServicesText = niceClassField.value;
-        } else if (
-          Array.isArray(niceClassField.values) &&
-          niceClassField.values.length > 0
-        ) {
-          produitsServicesText = niceClassField.values.join(", ");
+        } else if (Array.isArray(valueToParse)) {
+          const classNumbers = valueToParse
+            .map((nc: any) => nc.classNumber || nc.ClassNumber)
+            .filter((cn: any) => cn)
+            .sort((a: string, b: string) => parseInt(a, 10) - parseInt(b, 10));
+          if (classNumbers.length > 0)
+            produitsServicesText = `Classes: ${classNumbers.join(", ")}`;
+          else produitsServicesText = "Classes: N/A (empty array)";
+        } else if (typeof valueToParse === "object" && valueToParse !== null) {
+          if (valueToParse.classNumber || valueToParse.ClassNumber) {
+            produitsServicesText = `Classes: ${
+              valueToParse.classNumber || valueToParse.ClassNumber
+            }`;
+          } else {
+            produitsServicesText = `Classes: N/A (object, no classNumber)`; // JSON.stringify(valueToParse);
+          }
+        } else {
+          console.log(
+            "Frontend V2 Test Page: niceClassField.value is not a recognized type for parsing class numbers."
+          );
+          produitsServicesText = "Classes: N/A (unhandled type)";
+        }
+      } else {
+        console.log(
+          "Frontend V2 Test Page: No 'NiceClassDetails' field found or its value is undefined."
+        );
+        // Optional: Check for other speculative field names if NiceClassDetails fails
+        const otherClassField = fieldsArray.find(
+          (f) => f.name === "classNumbers" || f.name === "niceClasses_fr"
+        );
+        if (otherClassField && otherClassField.value) {
+          produitsServicesText = `Classes (other): ${otherClassField.value}`;
         }
       }
+      console.log(
+        "Frontend V2 Test Page: Final produitsServicesText:",
+        produitsServicesText
+      );
 
       let rawDateToFormat = findFieldValue(fieldsArray, "RegistrationDate");
       if (!rawDateToFormat) {
-        // findFieldValue for PublicationDate needs to be adjusted to return first value if it's an array
         const pubDateField = fieldsArray.find(
           (f) => f.name === "PublicationDate"
         );
@@ -224,26 +223,26 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
         produitsServices: produitsServicesText,
         origine: origine,
         statut: findFieldValue(fieldsArray, "MarkCurrentStatusCode") || "N/A",
-        noticeUrl: item.xml?.href, // This contains the full ID like EU13333497
+        noticeUrl: item.xml?.href,
         applicationNumber:
           findFieldValue(fieldsArray, "ApplicationNumber") || undefined,
       };
     });
-    console.log("Frontend: Mapped results:", mappedResults);
+    console.log("Frontend V2 Test Page: Mapped results:", mappedResults);
     return mappedResults;
   } else {
     console.error(
-      "Frontend: API response format error from backend: 'results' array not found or not an array",
+      "Frontend V2 Test Page: API response format error from backend: 'results' array not found or not an array",
       rawData
     );
     return [];
   }
 }
 
-export default function TrademarkSearch() {
+export default function TrademarkSearchV2TestPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
-  const router = useRouter(); // Initialize router
+  const router = useRouter();
 
   const {
     data: trademarks,
@@ -252,8 +251,8 @@ export default function TrademarkSearch() {
     refetch,
     isFetching,
   } = useQuery<Trademark[], Error>({
-    queryKey: ["trademarks", submittedQuery],
-    queryFn: () => searchTrademarks(submittedQuery),
+    queryKey: ["trademarksV2Test", submittedQuery],
+    queryFn: () => searchTrademarksV2(submittedQuery),
     enabled: !!submittedQuery,
     retry: 1,
   });
@@ -278,7 +277,7 @@ export default function TrademarkSearch() {
   const handleViewNotice = (noticeUrl?: string) => {
     if (noticeUrl) {
       const parts = noticeUrl.split("/");
-      const noticeId = parts[parts.length - 1]; // Extracts "EU13333497" or "FR123456"
+      const noticeId = parts[parts.length - 1];
       if (noticeId) {
         router.push(`/trademarkDetails/${noticeId}`);
       } else {
@@ -289,7 +288,9 @@ export default function TrademarkSearch() {
 
   return (
     <main className="container mx-auto p-4 max-w-4xl">
-      <h1 className="text-3xl font-bold mb-8 text-center">Trademark Search</h1>
+      <h1 className="text-3xl font-bold mb-8 text-center">
+        Trademark Search (API V2 Test Page)
+      </h1>
 
       <div className="flex gap-2 mb-6">
         <Input
@@ -305,7 +306,7 @@ export default function TrademarkSearch() {
           disabled={!searchQuery.trim() || isLoading || isFetching}
         >
           <Search className="w-4 h-4 mr-2" />
-          {isLoading || isFetching ? "Searching..." : "Search"}
+          {isLoading || isFetching ? "Searching (V2)..." : "Search (V2)"}
         </Button>
       </div>
 
@@ -318,7 +319,7 @@ export default function TrademarkSearch() {
           </div>
         ) : error ? (
           <div className="text-red-500 text-center p-4">
-            <p className="font-semibold">Error loading results</p>
+            <p className="font-semibold">Error loading results (V2)</p>
             <p className="text-sm mt-2">{error.message}</p>
             <Button
               variant="outline"
@@ -333,7 +334,7 @@ export default function TrademarkSearch() {
           <div className="space-y-4">
             {trademarks.map((trademark: Trademark, index: number) => (
               <Card
-                key={`${trademark.applicationNumber}-${index}-${trademark.marque}`}
+                key={`${trademark.applicationNumber}-${index}-${trademark.marque}-v2test`}
                 className="p-4"
               >
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -349,7 +350,7 @@ export default function TrademarkSearch() {
                   </div>
                   <div className="md:col-span-2">
                     <h3 className="font-semibold">
-                      Produits et services / Classification de Nice
+                      Produits et services / Classification de Nice (V2 Test)
                     </h3>
                     <p className="text-sm whitespace-pre-wrap">
                       {trademark.produitsServices}
@@ -386,12 +387,12 @@ export default function TrademarkSearch() {
           </div>
         ) : submittedQuery && !isLoading && !isFetching ? (
           <div className="text-center p-4 text-gray-500">
-            No results found for "{submittedQuery}". Try a different search
-            term.
+            No results found for "{submittedQuery}" (V2 Test). Try a different
+            search term.
           </div>
         ) : (
           <div className="text-center p-4 text-gray-400">
-            Enter a brand name and click Search.
+            Enter a brand name and click Search (V2) to test API V2.
           </div>
         )}
       </ScrollArea>
