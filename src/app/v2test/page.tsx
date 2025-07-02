@@ -44,7 +44,18 @@ function findFieldValue(
   return undefined;
 }
 
-function formatDateDisplay(yyyymmddStr?: string): string {
+/*************  ✨ Windsurf Command ⭐  *************/
+/**
+ * Formats a date string from "YYYYMMDD" format to "DD/MM/YYYY" format.
+ *
+ * @param {string} [yyyymmddStr] - The input date string in "YYYYMMDD" format.
+ * @returns {string} - The formatted date string in "DD/MM/YYYY" format.
+ *                     Returns "N/A" if the input is invalid or not in the expected format.
+ */
+
+/*******  9b77e6df-8389-4a62-b6c0-2b642584fc21  *******/ function formatDateDisplay(
+  yyyymmddStr?: string
+): string {
   if (!yyyymmddStr || yyyymmddStr.length !== 8) {
     return "N/A";
   }
@@ -123,81 +134,47 @@ async function searchTrademarksV2(query: string): Promise<Trademark[]> {
         }
       }
 
-      let produitsServicesText = "N/A";
-      const niceClassField = fieldsArray.find(
-        (f) => f.name === "NiceClassDetails"
-      );
-      console.log(
-        "Frontend V2 Test Page: niceClassField object found:",
-        JSON.stringify(niceClassField, null, 2)
+      let produitsServicesText = "N/A"; // Default text
+      const classNumberField = fieldsArray.find(
+        (f) => f.name === "ClassNumber"
       );
 
-      if (niceClassField && typeof niceClassField.value !== "undefined") {
-        console.log(
-          "Frontend V2 Test Page: niceClassField.value type:",
-          typeof niceClassField.value
-        );
-        console.log(
-          "Frontend V2 Test Page: niceClassField.value content:",
-          JSON.stringify(niceClassField.value, null, 2)
-        );
+      if (classNumberField) {
+        let classNumbers: string[] = [];
+        if (classNumberField.value) {
+          // Handles single value case
+          classNumbers = [classNumberField.value];
+        } else if (
+          Array.isArray(classNumberField.values) &&
+          classNumberField.values.length > 0
+        ) {
+          // Handles array of values
+          classNumbers = [...classNumberField.values];
+        }
 
-        const valueToParse = niceClassField.value;
-        if (typeof valueToParse === "string") {
-          try {
-            const parsed = JSON.parse(valueToParse); // If value is a JSON string
-            if (Array.isArray(parsed)) {
-              const classNumbers = parsed
-                .map((nc: any) => nc.classNumber || nc.ClassNumber) // Check for different casings
-                .filter((cn: any) => cn)
-                .sort(
-                  (a: string, b: string) => parseInt(a, 10) - parseInt(b, 10)
-                );
-              if (classNumbers.length > 0)
-                produitsServicesText = `Classes: ${classNumbers.join(", ")}`;
-              else produitsServicesText = "Classes: N/A (parsed empty array)";
-            } else {
-              produitsServicesText = `Classes: ${valueToParse} (string, not JSON array)`;
-            }
-          } catch (e) {
-            produitsServicesText = `Classes: ${valueToParse} (string, not valid JSON)`;
-          }
-        } else if (Array.isArray(valueToParse)) {
-          const classNumbers = valueToParse
-            .map((nc: any) => nc.classNumber || nc.ClassNumber)
-            .filter((cn: any) => cn)
-            .sort((a: string, b: string) => parseInt(a, 10) - parseInt(b, 10));
-          if (classNumbers.length > 0)
-            produitsServicesText = `Classes: ${classNumbers.join(", ")}`;
-          else produitsServicesText = "Classes: N/A (empty array)";
-        } else if (typeof valueToParse === "object" && valueToParse !== null) {
-          if (valueToParse.classNumber || valueToParse.ClassNumber) {
-            produitsServicesText = `Classes: ${
-              valueToParse.classNumber || valueToParse.ClassNumber
-            }`;
-          } else {
-            produitsServicesText = `Classes: N/A (object, no classNumber)`; // JSON.stringify(valueToParse);
-          }
+        if (classNumbers.length > 0) {
+          // Sort numbers numerically before joining
+          const sortedClassNumbers = classNumbers
+            .map((cn) => parseInt(cn, 10)) // Convert to numbers for correct sorting
+            .filter((cn) => !isNaN(cn)) // Filter out any NaN values if parsing fails
+            .sort((a, b) => a - b) // Sort numerically
+            .map((cn) => cn.toString()); // Convert back to strings
+          produitsServicesText = sortedClassNumbers.join(", ");
         } else {
           console.log(
-            "Frontend V2 Test Page: niceClassField.value is not a recognized type for parsing class numbers."
+            "Frontend V2 Test Page: 'ClassNumber' field found but contained no usable values."
           );
-          produitsServicesText = "Classes: N/A (unhandled type)";
+          // produitsServicesText remains "N/A"
         }
       } else {
         console.log(
-          "Frontend V2 Test Page: No 'NiceClassDetails' field found or its value is undefined."
+          "Frontend V2 Test Page: No 'ClassNumber' field found for this item."
         );
-        // Optional: Check for other speculative field names if NiceClassDetails fails
-        const otherClassField = fieldsArray.find(
-          (f) => f.name === "classNumbers" || f.name === "niceClasses_fr"
-        );
-        if (otherClassField && otherClassField.value) {
-          produitsServicesText = `Classes (other): ${otherClassField.value}`;
-        }
+        // produitsServicesText remains "N/A"
       }
+
       console.log(
-        "Frontend V2 Test Page: Final produitsServicesText:",
+        "Frontend V2 Test Page: Final produitsServicesText (Nice Classification):",
         produitsServicesText
       );
 
