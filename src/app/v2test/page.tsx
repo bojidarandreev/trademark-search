@@ -44,18 +44,7 @@ function findFieldValue(
   return undefined;
 }
 
-/*************  ✨ Windsurf Command ⭐  *************/
-/**
- * Formats a date string from "YYYYMMDD" format to "DD/MM/YYYY" format.
- *
- * @param {string} [yyyymmddStr] - The input date string in "YYYYMMDD" format.
- * @returns {string} - The formatted date string in "DD/MM/YYYY" format.
- *                     Returns "N/A" if the input is invalid or not in the expected format.
- */
-
-/*******  9b77e6df-8389-4a62-b6c0-2b642584fc21  *******/ function formatDateDisplay(
-  yyyymmddStr?: string
-): string {
+function formatDateDisplay(yyyymmddStr?: string): string {
   if (!yyyymmddStr || yyyymmddStr.length !== 8) {
     return "N/A";
   }

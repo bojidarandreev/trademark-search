@@ -290,10 +290,24 @@ export async function GET(request: Request) {
       );
     }
 
+    // Modify queryFromUser for phrase search if it contains spaces
+    let processedQuery = queryFromUser.trim();
+    if (processedQuery.includes(" ")) {
+      // Escape any pre-existing quotes within the phrase and then wrap
+      processedQuery = `"${processedQuery.replace(/"/g, '\\"')}"`;
+    }
+    // If it's a single word, Solr typically handles it fine without quotes,
+    // but quoting it is also okay: processedQuery = `"${processedQuery}"`;
+    // For now, only quoting multi-word phrases.
+
     console.log(
-      "GET HANDLER: User query:",
+      "GET HANDLER: Original user query:",
       queryFromUser,
-      "Requested Sort by:",
+      "Processed query for INPI API:",
+      processedQuery
+    );
+    console.log(
+      "GET HANDLER: Requested Sort by:",
       sortFieldFromUrl,
       "Order:",
       orderFromUrl
@@ -322,7 +336,7 @@ export async function GET(request: Request) {
     }
 
     const searchPayload: any = {
-      query: `[Mark=${queryFromUser}]`,
+      query: `[Mark=${processedQuery}]`, // Use the processed query
       position: (parsedPage - 1) * parsedNbResultsPerPage,
       size: parsedNbResultsPerPage,
       collections: ["FR", "EU", "WO"],
