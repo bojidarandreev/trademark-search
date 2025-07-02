@@ -88,10 +88,27 @@ async function performSearchV2(
         "PERFORM_SEARCH_V2: Using XSRF-TOKEN directly from metadata Set-Cookie header:",
         xsrfTokenForPostRequest
       );
-      updateXsrfTokenValue(xsrfTokenForPostRequest); // Update global cache with the most definitive token
+      updateXsrfTokenValue(xsrfTokenForPostRequest); // Update global cache
+
+      // Explicitly set the new XSRF-TOKEN cookie in the jar for the search domain
+      // This is the critical fix: ensuring the cookie jar has the *exact* token
+      // that the metadata endpoint just provided.
+      try {
+        await clientV2.defaults.jar!.setCookie(
+          `XSRF-TOKEN=${xsrfTokenForPostRequest}; Path=/`,
+          ACTUAL_MARQUES_SEARCH_ENDPOINT // Ensure it's set for the domain of the search endpoint
+        );
+        console.log(
+          `PERFORM_SEARCH_V2: Successfully set XSRF-TOKEN=${xsrfTokenForPostRequest} in cookie jar for ${ACTUAL_MARQUES_SEARCH_ENDPOINT}`
+        );
+      } catch (e) {
+        console.error(
+          "PERFORM_SEARCH_V2: Error setting XSRF-TOKEN cookie in jar:",
+          e
+        );
+      }
     } else {
-      // Fallback if Set-Cookie didn't explicitly contain XSRF-TOKEN (should not happen based on logs)
-      // or if we want to double-check the jar
+      // Fallback logic (less likely path based on current logs, but kept for robustness)
       const cookiesInJarAfterMetadataGet =
         await clientV2.defaults.jar!.getCookies(
           ACTUAL_MARQUES_METADATA_ENDPOINT
@@ -104,7 +121,7 @@ async function performSearchV2(
         }]`
       );
       const specificSearchXsrfCookieFromJar = cookiesInJarAfterMetadataGet.find(
-        (c) => c.key === "XSRF-TOKEN" && c.path === "/" // Path is usually '/'
+        (c) => c.key === "XSRF-TOKEN" && c.path === "/"
       );
       if (specificSearchXsrfCookieFromJar?.value) {
         const tokenFromJar = decodeURIComponent(
@@ -114,29 +131,27 @@ async function performSearchV2(
           "PERFORM_SEARCH_V2: XSRF-TOKEN found in JAR after metadata GET:",
           tokenFromJar
         );
-        if (tokenFromJar !== currentGlobalXsrfToken) {
-          // Only if it's different and potentially newer
+        // Only update if it's genuinely different and should be the one used
+        if (tokenFromJar !== xsrfTokenForPostRequest) {
           xsrfTokenForPostRequest = tokenFromJar;
           updateXsrfTokenValue(xsrfTokenForPostRequest);
           console.log(
-            "PERFORM_SEARCH_V2: Updated XSRF token from JAR as it was different from initial."
+            "PERFORM_SEARCH_V2: Updated XSRF token from JAR."
           );
         } else {
-          console.log(
-            "PERFORM_SEARCH_V2: XSRF token in JAR same as initial, no update from JAR."
+           console.log(
+            "PERFORM_SEARCH_V2: XSRF token in JAR same as one from metadata header, no change from JAR."
           );
-          // xsrfTokenForPostRequest remains currentGlobalXsrfToken
         }
       } else {
         console.warn(
-          `PERFORM_SEARCH_V2: No new XSRF-TOKEN found from metadata Set-Cookie or JAR. Using initial: '${
+          `PERFORM_SEARCH_V2: No new XSRF-TOKEN found from metadata Set-Cookie or JAR. Using initial/previous: '${
             xsrfTokenForPostRequest || "None"
           }'`
         );
-        // updateXsrfTokenValue is not strictly needed here if xsrfTokenForPostRequest didn't change from currentGlobalXsrfToken
-        // but if currentGlobalXsrfToken was null/undefined and we still have nothing, it's fine.
-        if (xsrfTokenForPostRequest)
+        if (xsrfTokenForPostRequest) {
           updateXsrfTokenValue(xsrfTokenForPostRequest);
+        }
       }
     }
   } catch (metaError) {
@@ -146,9 +161,14 @@ async function performSearchV2(
         xsrfTokenForPostRequest || "None"
       }'`
     );
-    // Ensure the global cache reflects what we're about to use if the GET failed
-    if (xsrfTokenForPostRequest) updateXsrfTokenValue(xsrfTokenForPostRequest);
-    else clearAuthCache(); // If it was null and GET failed, clear to be safe.
+    if (xsrfTokenForPostRequest) {
+      updateXsrfTokenValue(xsrfTokenForPostRequest);
+    } else {
+      // If there was no initial token and metadata failed, it's problematic.
+      // Consider if clearing auth cache is right or if we should throw.
+      // For now, matching existing logic:
+      // clearAuthCache(); // This was present in original, but might be too aggressive if login token was valid
+    }
   }
 
   console.log(
@@ -166,26 +186,63 @@ async function performSearchV2(
     JSON.stringify(searchPayload, null, 2)
   );
 
-  const preSearchPostCookies = await clientV2.defaults.jar!.getCookieString(
-    ACTUAL_MARQUES_SEARCH_ENDPOINT
-  );
+  // Manually construct the Cookie header for the search POST
+  let searchPostCookieHeader = "";
+  try {
+    const allCookiesForSearchUrl = await clientV2.defaults.jar!.getCookies(
+      ACTUAL_MARQUES_SEARCH_ENDPOINT
+    );
+
+    const otherCookieStrings = allCookiesForSearchUrl
+      .filter(cookie => cookie.key !== "XSRF-TOKEN")
+      .map(cookie => cookie.cookieString());
+
+    const finalCookieParts = [...otherCookieStrings];
+    if (xsrfTokenForPostRequest) {
+      finalCookieParts.push(`XSRF-TOKEN=${xsrfTokenForPostRequest}`);
+    }
+    searchPostCookieHeader = finalCookieParts.join("; ");
+
+  } catch(e) {
+    console.error("PERFORM_SEARCH_V2: Error constructing cookie header string from jar:", e);
+    // Fallback: if jar operations fail, just use the XSRF token if available
+    if (xsrfTokenForPostRequest) {
+        searchPostCookieHeader = `XSRF-TOKEN=${xsrfTokenForPostRequest}`;
+    } else {
+        searchPostCookieHeader = ""; // No cookies if jar fails and no XSRF token
+    }
+  }
+
   console.log(
-    `PERFORM_SEARCH_V2: Cookies TO BE SENT with search POST to ${ACTUAL_MARQUES_SEARCH_ENDPOINT}: [${
-      preSearchPostCookies || "NONE"
+    `PERFORM_SEARCH_V2: Manually constructed Cookie header for search POST: [${
+      searchPostCookieHeader || "NONE"
     }]`
   );
 
+  const requestHeaders: Record<string, string> = {
+    Authorization: `Bearer ${bearerToken}`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    "User-Agent":
+      "Next.js Trademark Search App/1.0 (API Test with Corrected XSRF Logic V8)",
+  };
+  if (xsrfTokenForPostRequest) {
+    requestHeaders["X-XSRF-TOKEN"] = xsrfTokenForPostRequest;
+  }
+  // Only set the Cookie header if we have something to send
+  if (searchPostCookieHeader) {
+    requestHeaders["Cookie"] = searchPostCookieHeader;
+  } else {
+    // If searchPostCookieHeader is empty, we might not want to send an empty Cookie header.
+    // Axios might behave differently if 'Cookie' is present but empty vs. not present at all.
+    // For now, let's omit it if it's empty.
+    console.log("PERFORM_SEARCH_V2: No cookies to send in Cookie header for search POST.");
+  }
+
   return clientV2.post("/api/marques/search", searchPayload, {
-    headers: {
-      Authorization: `Bearer ${bearerToken}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      "X-XSRF-TOKEN": xsrfTokenForPostRequest || "",
-      "User-Agent":
-        "Next.js Trademark Search App/1.0 (API Test with Corrected XSRF Logic V8)",
-    },
+    headers: requestHeaders,
   });
-}
+} // This closing brace was likely the source of the syntax error. It correctly closes performSearchV2.
 
 export async function GET(request: Request) {
   console.log(
