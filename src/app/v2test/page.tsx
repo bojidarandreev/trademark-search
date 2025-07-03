@@ -8,10 +8,61 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox"; // Added for Nice Class filter
+import { Label } from "@/components/ui/label"; // Added for Nice Class filter
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
-// Types for the trademark search results (assuming same structure for now)
+// Nice Classification Classes (Hardcoded)
+const niceClassesList = [
+  { id: 1, title: "Class 1: Chemicals, resins, plastics" },
+  { id: 2, title: "Class 2: Paints, colorants, inks" },
+  { id: 3, title: "Class 3: Cosmetics, cleaning preparations" },
+  { id: 4, title: "Class 4: Industrial oils, greases, fuels" },
+  { id: 5, title: "Class 5: Pharmaceuticals, medical supplies" },
+  { id: 6, title: "Class 6: Common metals and their alloys" },
+  { id: 7, title: "Class 7: Machines and machine tools" },
+  { id: 8, title: "Class 8: Hand tools and implements" },
+  { id: 9, title: "Class 9: Scientific, electric, electronic apparatus" },
+  { id: 10, title: "Class 10: Medical and veterinary apparatus" },
+  { id: 11, title: "Class 11: Environmental control apparatus" },
+  { id: 12, title: "Class 12: Vehicles" },
+  { id: 13, title: "Class 13: Firearms, ammunition, explosives" },
+  { id: 14, title: "Class 14: Precious metals, jewellery" },
+  { id: 15, title: "Class 15: Musical instruments" },
+  { id: 16, title: "Class 16: Paper goods, printed matter" },
+  { id: 17, title: "Class 17: Rubber, plastics, insulating materials" },
+  { id: 18, title: "Class 18: Leather goods, luggage" },
+  { id: 19, title: "Class 19: Building materials (non-metallic)" },
+  { id: 20, title: "Class 20: Furniture, mirrors, picture frames" },
+  { id: 21, title: "Class 21: Household utensils, glassware" },
+  { id: 22, title: "Class 22: Ropes, tents, padding materials" },
+  { id: 23, title: "Class 23: Yarns and threads" },
+  { id: 24, title: "Class 24: Textiles and textile goods" },
+  { id: 25, title: "Class 25: Clothing, footwear, headgear" },
+  { id: 26, title: "Class 26: Lace and embroidery, buttons, etc." },
+  { id: 27, title: "Class 27: Floor coverings, wall hangings" },
+  { id: 28, title: "Class 28: Games, toys, sporting goods" },
+  { id: 29, title: "Class 29: Meat, fish, poultry, dairy products" },
+  { id: 30, title: "Class 30: Coffee, tea, cocoa, bakery goods" },
+  { id: 31, title: "Class 31: Agricultural, horticultural products" },
+  { id: 32, title: "Class 32: Beers, non-alcoholic beverages" },
+  { id: 33, title: "Class 33: Alcoholic beverages (except beers)" },
+  { id: 34, title: "Class 34: Tobacco, smokers' articles" },
+  { id: 35, title: "Class 35: Advertising, business management" },
+  { id: 36, title: "Class 36: Insurance, financial, real estate" },
+  { id: 37, title: "Class 37: Construction, repair, installation" },
+  { id: 38, title: "Class 38: Telecommunications" },
+  { id: 39, title: "Class 39: Transport, packaging, storage" },
+  { id: 40, title: "Class 40: Treatment of materials" },
+  { id: 41, title: "Class 41: Education, entertainment, sports" },
+  { id: 42, title: "Class 42: Scientific, technological services" },
+  { id: 43, title: "Class 43: Services for providing food and drink" },
+  { id: 44, title: "Class 44: Medical, veterinary, beauty services" },
+  { id: 45, title: "Class 45: Legal, security, personal services" },
+];
+
+// Types for the trademark search results
 const trademarkSchema = z.object({
   marque: z.string(),
   dateDepot: z.string(),
@@ -57,18 +108,22 @@ function formatDateDisplay(yyyymmddStr?: string): string {
   return `${day}/${month}/${year}`;
 }
 
-async function searchTrademarksV2(query: string): Promise<Trademark[]> {
+async function searchTrademarksV2(
+  query: string,
+  niceClasses: number[] = [] // Added niceClasses parameter
+): Promise<Trademark[]> {
   if (!query.trim()) {
     console.log("Frontend V2 Test Page: Empty query, not fetching.");
     return [];
   }
 
-  console.log(
-    `Frontend V2 Test Page: Fetching /api/trademarks/searchV2?q=${query}`
-  );
-  const response = await fetch(
-    `/api/trademarks/searchV2?q=${encodeURIComponent(query)}`
-  );
+  let apiUrl = `/api/trademarks/searchV2?q=${encodeURIComponent(query)}`;
+  if (niceClasses.length > 0) {
+    apiUrl += `&niceClasses=${niceClasses.join(",")}`;
+  }
+
+  console.log(`Frontend V2 Test Page: Fetching ${apiUrl}`);
+  const response = await fetch(apiUrl);
   const rawData = await response.json();
 
   if (!response.ok) {
@@ -208,6 +263,7 @@ async function searchTrademarksV2(query: string): Promise<Trademark[]> {
 export default function TrademarkSearchV2TestPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
+  const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>([]);
   const router = useRouter();
 
   const {
@@ -217,15 +273,28 @@ export default function TrademarkSearchV2TestPage() {
     refetch,
     isFetching,
   } = useQuery<Trademark[], Error>({
-    queryKey: ["trademarksV2Test", submittedQuery],
-    queryFn: () => searchTrademarksV2(submittedQuery),
+    queryKey: [
+      "trademarksV2Test",
+      submittedQuery,
+      selectedNiceClasses.join(","),
+    ], // Include selectedNiceClasses in queryKey
+    queryFn: () => searchTrademarksV2(submittedQuery, selectedNiceClasses), // Pass selectedNiceClasses to fetch function
     enabled: !!submittedQuery,
     retry: 1,
   });
 
+  const handleNiceClassChange = (classId: number) => {
+    setSelectedNiceClasses((prevSelectedClasses) =>
+      prevSelectedClasses.includes(classId)
+        ? prevSelectedClasses.filter((id) => id !== classId)
+        : [...prevSelectedClasses, classId]
+    );
+  };
+
   const handleSearch = () => {
     if (searchQuery.trim()) {
       setSubmittedQuery(searchQuery.trim());
+      // query will be re-fetched by react-query due to queryKey change or explicit call if needed
     }
   };
 
@@ -257,6 +326,35 @@ export default function TrademarkSearchV2TestPage() {
       <h1 className="text-3xl font-bold mb-8 text-center">
         Trademark Search (API V2 Test Page)
       </h1>
+
+      <div className="mb-6">
+        <h2 className="text-xl font-semibold mb-3">
+          Filter by Nice Classification
+        </h2>
+        <ScrollArea className="h-40 rounded-md border p-4 mb-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-2">
+            {niceClassesList.map((niceClass) => (
+              <div key={niceClass.id} className="flex items-center space-x-2">
+                <Checkbox
+                  id={`nice-class-${niceClass.id}`}
+                  checked={selectedNiceClasses.includes(niceClass.id)}
+                  onCheckedChange={() => handleNiceClassChange(niceClass.id)}
+                />
+                <Label
+                  htmlFor={`nice-class-${niceClass.id}`}
+                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                >
+                  {niceClass.title}
+                </Label>
+              </div>
+            ))}
+          </div>
+        </ScrollArea>
+        <p className="text-sm text-muted-foreground">
+          Selected Classes:{" "}
+          {selectedNiceClasses.sort((a, b) => a - b).join(", ") || "None"}
+        </p>
+      </div>
 
       <div className="flex gap-2 mb-6">
         <Input
@@ -353,7 +451,7 @@ export default function TrademarkSearchV2TestPage() {
           </div>
         ) : submittedQuery && !isLoading && !isFetching ? (
           <div className="text-center p-4 text-gray-500">
-            No results found for "{submittedQuery}" (V2 Test). Try a different
+            No results found for `{submittedQuery} (V2 Test). Try a different
             search term.
           </div>
         ) : (

@@ -11,10 +11,11 @@ import {
 } from "@/lib/inpi-client";
 
 const INPI_API_BASE_URL = "https://api-gateway.inpi.fr/services/apidiffusion";
-
 const ACTUAL_MARQUES_METADATA_ENDPOINT = `${INPI_API_BASE_URL}/api/marques/metadata`;
 const ACTUAL_MARQUES_SEARCH_ENDPOINT = `${INPI_API_BASE_URL}/api/marques/search`;
 
+// It's important that apiClientV1.defaults.jar is initialized when inpi-client is imported.
+// We assume it is, as per the structure of inpi-client.ts
 const clientV2 = axios.create({
   baseURL: INPI_API_BASE_URL,
   withCredentials: true,
@@ -26,10 +27,10 @@ async function performSearchV2(
   searchPayload: any
 ): Promise<any> {
   console.log(
-    "<<<<<< CHECKING LATEST LOGGING CODE - JULY 1ST - V8 (Corrected XSRF Logic) >>>>>>"
+    "<<<<<< performSearchV2 - JULY 2ND - V9 (Backend Filtering Strategy) >>>>>>"
   );
 
-  let currentGlobalXsrfToken = getXsrfTokenValue(); // Token from login or previous op
+  let currentGlobalXsrfToken = getXsrfTokenValue();
   console.log(
     `PERFORM_SEARCH_V2: Initial global XSRF token before metadata GET: '${
       currentGlobalXsrfToken || "None"
@@ -39,23 +40,13 @@ async function performSearchV2(
     `PERFORM_SEARCH_V2: Attempting preliminary GET to ${ACTUAL_MARQUES_METADATA_ENDPOINT} for search-specific XSRF token.`
   );
 
-  let xsrfTokenForPostRequest = currentGlobalXsrfToken; // Default to current global/login token
+  let xsrfTokenForPostRequest = currentGlobalXsrfToken;
 
   try {
-    const preMetadataCookies = await clientV2.defaults.jar!.getCookieString(
-      ACTUAL_MARQUES_METADATA_ENDPOINT
-    );
-    console.log(
-      `PERFORM_SEARCH_V2: Cookies TO BE SENT with metadata GET to ${ACTUAL_MARQUES_METADATA_ENDPOINT}: [${
-        preMetadataCookies || "NONE"
-      }]`
-    );
-
     const metadataResponse = await clientV2.get("/api/marques/metadata", {
       headers: {
         Authorization: `Bearer ${bearerToken}`,
         Accept: "application/json",
-        // It's generally good practice to send the current XSRF token if we have one, even for a GET that might refresh it
         "X-XSRF-TOKEN": currentGlobalXsrfToken || "",
       },
     });
@@ -66,10 +57,6 @@ async function performSearchV2(
     const metadataSetCookieHeader = metadataResponse.headers["set-cookie"];
     let identifiedNewXsrfTokenFromHeader;
     if (metadataSetCookieHeader) {
-      console.log(
-        `PERFORM_SEARCH_V2: Set-Cookie headers FROM metadata GET response:`,
-        metadataSetCookieHeader
-      );
       for (const cookieStr of metadataSetCookieHeader) {
         if (cookieStr.startsWith("XSRF-TOKEN=")) {
           identifiedNewXsrfTokenFromHeader = cookieStr
@@ -88,38 +75,16 @@ async function performSearchV2(
         "PERFORM_SEARCH_V2: Using XSRF-TOKEN directly from metadata Set-Cookie header:",
         xsrfTokenForPostRequest
       );
-      updateXsrfTokenValue(xsrfTokenForPostRequest); // Update global cache
-
-      // Explicitly set the new XSRF-TOKEN cookie in the jar for the search domain
-      // This is the critical fix: ensuring the cookie jar has the *exact* token
-      // that the metadata endpoint just provided.
-      try {
-        await clientV2.defaults.jar!.setCookie(
-          `XSRF-TOKEN=${xsrfTokenForPostRequest}; Path=/`,
-          ACTUAL_MARQUES_SEARCH_ENDPOINT // Ensure it's set for the domain of the search endpoint
-        );
-        console.log(
-          `PERFORM_SEARCH_V2: Successfully set XSRF-TOKEN=${xsrfTokenForPostRequest} in cookie jar for ${ACTUAL_MARQUES_SEARCH_ENDPOINT}`
-        );
-      } catch (e) {
-        console.error(
-          "PERFORM_SEARCH_V2: Error setting XSRF-TOKEN cookie in jar:",
-          e
-        );
-      }
+      updateXsrfTokenValue(xsrfTokenForPostRequest);
+      await clientV2.defaults.jar!.setCookie(
+        `XSRF-TOKEN=${xsrfTokenForPostRequest}; Path=/`,
+        ACTUAL_MARQUES_SEARCH_ENDPOINT
+      );
     } else {
-      // Fallback logic (less likely path based on current logs, but kept for robustness)
       const cookiesInJarAfterMetadataGet =
         await clientV2.defaults.jar!.getCookies(
           ACTUAL_MARQUES_METADATA_ENDPOINT
         );
-      console.log(
-        `PERFORM_SEARCH_V2: Cookies IN JAR AFTER metadata GET (for ${ACTUAL_MARQUES_METADATA_ENDPOINT}): [${
-          cookiesInJarAfterMetadataGet
-            .map((c) => c.cookieString())
-            .join("; ") || "NONE"
-        }]`
-      );
       const specificSearchXsrfCookieFromJar = cookiesInJarAfterMetadataGet.find(
         (c) => c.key === "XSRF-TOKEN" && c.path === "/"
       );
@@ -127,154 +92,82 @@ async function performSearchV2(
         const tokenFromJar = decodeURIComponent(
           specificSearchXsrfCookieFromJar.value
         );
-        console.log(
-          "PERFORM_SEARCH_V2: XSRF-TOKEN found in JAR after metadata GET:",
-          tokenFromJar
-        );
-        // Only update if it's genuinely different and should be the one used
         if (tokenFromJar !== xsrfTokenForPostRequest) {
           xsrfTokenForPostRequest = tokenFromJar;
           updateXsrfTokenValue(xsrfTokenForPostRequest);
-          console.log("PERFORM_SEARCH_V2: Updated XSRF token from JAR.");
-        } else {
-          console.log(
-            "PERFORM_SEARCH_V2: XSRF token in JAR same as one from metadata header, no change from JAR."
-          );
         }
       } else {
         console.warn(
-          `PERFORM_SEARCH_V2: No new XSRF-TOKEN found from metadata Set-Cookie or JAR. Using initial/previous: '${
+          `PERFORM_SEARCH_V2: No new XSRF-TOKEN found. Using previous: '${
             xsrfTokenForPostRequest || "None"
           }'`
         );
-        if (xsrfTokenForPostRequest) {
+        if (xsrfTokenForPostRequest)
           updateXsrfTokenValue(xsrfTokenForPostRequest);
-        }
       }
     }
   } catch (metaError) {
     logError("performSearchV2_preliminaryGetToMetadata", metaError);
     console.warn(
-      `PERFORM_SEARCH_V2: Preliminary GET to metadata failed. Proceeding with initial XSRF token: '${
+      `PERFORM_SEARCH_V2: Preliminary GET to metadata failed. Proceeding with XSRF token: '${
         xsrfTokenForPostRequest || "None"
       }'`
     );
-    if (xsrfTokenForPostRequest) {
-      updateXsrfTokenValue(xsrfTokenForPostRequest);
-    } else {
-      // If there was no initial token and metadata failed, it's problematic.
-      // Consider if clearing auth cache is right or if we should throw.
-      // For now, matching existing logic:
-      // clearAuthCache(); // This was present in original, but might be too aggressive if login token was valid
-    }
+    if (xsrfTokenForPostRequest) updateXsrfTokenValue(xsrfTokenForPostRequest);
   }
 
   console.log(
-    `PERFORM_SEARCH_V2: X-XSRF-TOKEN to be used in POST header (after all checks): '${
+    `PERFORM_SEARCH_V2: X-XSRF-TOKEN to be used in POST header: '${
       xsrfTokenForPostRequest || "None"
     }'`
-  );
-
-  console.log(
-    "PERFORM_SEARCH_V2: Making POST request to search endpoint:",
-    ACTUAL_MARQUES_SEARCH_ENDPOINT
   );
   console.log(
     "PERFORM_SEARCH_V2: Search Payload for INPI:",
     JSON.stringify(searchPayload, null, 2)
   );
 
-  // Manually construct the Cookie header for the search POST
   let searchPostCookieHeader = "";
   try {
     const allCookiesForSearchUrl = await clientV2.defaults.jar!.getCookies(
       ACTUAL_MARQUES_SEARCH_ENDPOINT
     );
-
     const otherCookieStrings = allCookiesForSearchUrl
       .filter((cookie) => cookie.key !== "XSRF-TOKEN")
       .map((cookie) => cookie.cookieString());
-
     const finalCookieParts = [...otherCookieStrings];
-    if (xsrfTokenForPostRequest) {
+    if (xsrfTokenForPostRequest)
       finalCookieParts.push(`XSRF-TOKEN=${xsrfTokenForPostRequest}`);
-    }
     searchPostCookieHeader = finalCookieParts.join("; ");
   } catch (e) {
     console.error(
-      "PERFORM_SEARCH_V2: Error constructing cookie header string from jar:",
+      "PERFORM_SEARCH_V2: Error constructing cookie header from jar:",
       e
     );
-    // Fallback: if jar operations fail, just use the XSRF token if available
-    if (xsrfTokenForPostRequest) {
+    if (xsrfTokenForPostRequest)
       searchPostCookieHeader = `XSRF-TOKEN=${xsrfTokenForPostRequest}`;
-    } else {
-      searchPostCookieHeader = ""; // No cookies if jar fails and no XSRF token
-    }
   }
-
-  console.log(
-    `PERFORM_SEARCH_V2: Manually constructed Cookie header for search POST: [${
-      searchPostCookieHeader || "NONE"
-    }]`
-  );
 
   const requestHeaders: Record<string, string> = {
     Authorization: `Bearer ${bearerToken}`,
     "Content-Type": "application/json",
     Accept: "application/json",
     "User-Agent":
-      "Next.js Trademark Search App/1.0 (API Test with Corrected XSRF Logic V8)",
+      "Next.js Trademark Search App/1.0 (Backend Filtering Strategy)",
   };
-  if (xsrfTokenForPostRequest) {
+  if (xsrfTokenForPostRequest)
     requestHeaders["X-XSRF-TOKEN"] = xsrfTokenForPostRequest;
-  }
-  // Only set the Cookie header if we have something to send
-  if (searchPostCookieHeader) {
-    requestHeaders["Cookie"] = searchPostCookieHeader;
-  } else {
-    // If searchPostCookieHeader is empty, we might not want to send an empty Cookie header.
-    // Axios might behave differently if 'Cookie' is present but empty vs. not present at all.
-    // For now, let's omit it if it's empty.
-    console.log(
-      "PERFORM_SEARCH_V2: No cookies to send in Cookie header for search POST."
-    );
-  }
+  if (searchPostCookieHeader) requestHeaders["Cookie"] = searchPostCookieHeader;
 
   return clientV2.post("/api/marques/search", searchPayload, {
     headers: requestHeaders,
   });
-} // This closing brace was likely the source of the syntax error. It correctly closes performSearchV2.
+}
 
 export async function GET(request: Request) {
   console.log(
-    "<<<<<< GET HANDLER - JULY 1ST - V8 (Corrected XSRF Logic) >>>>>>"
+    "<<<<<< GET HANDLER - JULY 2ND - V9 (Backend Filtering Strategy) >>>>>>"
   );
   try {
-    if (!apiClientV1.defaults.jar) {
-      console.error(
-        "GET HANDLER: apiClientV1.defaults.jar is not initialized! This indicates a critical setup issue."
-      );
-    } else {
-      try {
-        const allCookiesInJar = await apiClientV1.defaults.jar.getCookies(
-          INPI_API_BASE_URL
-        );
-        console.log(
-          "GET HANDLER: Cookies in shared apiClientV1.defaults.jar at start of GET request (domain: " +
-            INPI_API_BASE_URL +
-            "): [",
-          allCookiesInJar.map((c) => c.cookieString()).join("; ") || "NONE",
-          "]"
-        );
-      } catch (e) {
-        console.error(
-          "GET HANDLER: Error fetching cookies from jar for INPI_API_BASE_URL",
-          e
-        );
-      }
-    }
-
     const { searchParams } = new URL(request.url);
     const queryFromUser = searchParams.get("q");
     const pageFromUser = searchParams.get("page") || "1";
@@ -282,6 +175,7 @@ export async function GET(request: Request) {
       searchParams.get("nbResultsPerPage") || "20";
     let sortFieldFromUrl = searchParams.get("sort") || "relevance";
     let orderFromUrl = searchParams.get("order") || "asc";
+    const niceClassesParam = searchParams.get("niceClasses");
 
     if (!queryFromUser) {
       return NextResponse.json(
@@ -290,53 +184,52 @@ export async function GET(request: Request) {
       );
     }
 
-    // Modify queryFromUser for phrase search if it contains spaces
     let processedQuery = queryFromUser.trim();
     if (processedQuery.includes(" ")) {
-      // Escape any pre-existing quotes within the phrase and then wrap
       processedQuery = `"${processedQuery.replace(/"/g, '\\"')}"`;
     }
-    // If it's a single word, Solr typically handles it fine without quotes,
-    // but quoting it is also okay: processedQuery = `"${processedQuery}"`;
-    // For now, only quoting multi-word phrases.
+
+    const solrQueryForINPI = `[Mark=${processedQuery}]`;
+
+    let niceClassesForBackendFilter: number[] = [];
+    if (niceClassesParam) {
+      niceClassesForBackendFilter = niceClassesParam
+        .split(",")
+        .map((nc) => parseInt(nc.trim(), 10))
+        .filter((nc) => !isNaN(nc) && nc > 0 && nc <= 45);
+      if (niceClassesForBackendFilter.length > 0) {
+        console.log(
+          "GET HANDLER: Nice Classes selected for backend filtering:",
+          niceClassesForBackendFilter.join(", ")
+        );
+      }
+    }
 
     console.log(
       "GET HANDLER: Original user query:",
       queryFromUser,
-      "Processed query for INPI API:",
-      processedQuery
+      "Processed mark query for INPI:",
+      processedQuery,
+      "Final Solr Query to INPI:",
+      solrQueryForINPI
     );
-    console.log(
-      "GET HANDLER: Requested Sort by:",
-      sortFieldFromUrl,
-      "Order:",
-      orderFromUrl
-    );
-    let token = await getAccessToken();
-    console.log("GET HANDLER: Got access token, preparing search request...");
 
+    let token = await getAccessToken();
     const parsedPage = parseInt(pageFromUser);
     const parsedNbResultsPerPage = parseInt(nbResultsPerPageFromUser);
-
     let finalSortField: string;
     let finalSortOrder: string =
       orderFromUrl.toLowerCase() === "desc" ? "desc" : "asc";
 
     if (sortFieldFromUrl.toLowerCase() === "relevance") {
-      finalSortField = "APPLICATION_DATE";
+      finalSortField = "APPLICATION_DATE"; // Defaulting to this, INPI might use something like 'score'
       finalSortOrder = "desc";
-      console.log(
-        `GET HANDLER: Sort by 'relevance' requested, mapping to '${finalSortField} ${finalSortOrder}'`
-      );
     } else {
       finalSortField = sortFieldFromUrl.toUpperCase();
-      console.log(
-        `GET HANDLER: Using user sort: '${finalSortField} ${finalSortOrder}'`
-      );
     }
 
     const searchPayload: any = {
-      query: `[Mark=${processedQuery}]`, // Use the processed query
+      query: solrQueryForINPI,
       position: (parsedPage - 1) * parsedNbResultsPerPage,
       size: parsedNbResultsPerPage,
       collections: ["FR", "EU", "WO"],
@@ -360,6 +253,7 @@ export async function GET(request: Request) {
       ],
       sortList: [`${finalSortField} ${finalSortOrder}`],
     };
+
     console.log(
       "GET HANDLER: Constructed search payload for INPI:",
       JSON.stringify(searchPayload, null, 2)
@@ -371,71 +265,83 @@ export async function GET(request: Request) {
         "GET HANDLER: Search response status from INPI:",
         response.status
       );
+
+      let responseData = response.data;
+
+      if (
+        niceClassesForBackendFilter.length > 0 &&
+        responseData &&
+        Array.isArray(responseData.results)
+      ) {
+        console.log(
+          `GET HANDLER: Filtering ${
+            responseData.results.length
+          } results from INPI by Nice Classes: ${niceClassesForBackendFilter.join(
+            ", "
+          )}`
+        );
+        responseData.results = responseData.results.filter((item: any) => {
+          const classNumberField = Array.isArray(item.fields)
+            ? item.fields.find((f: any) => f.name === "ClassNumber")
+            : null;
+          if (classNumberField) {
+            let itemClassesRaw: string[] = [];
+            if (classNumberField.value) {
+              // Single value
+              itemClassesRaw = [classNumberField.value];
+            } else if (Array.isArray(classNumberField.values)) {
+              // Array of values
+              itemClassesRaw = classNumberField.values;
+            }
+            const itemClassNumbers = itemClassesRaw
+              .map((cn) => parseInt(cn, 10))
+              .filter((cn) => !isNaN(cn));
+            // Ensure all selected classes are present in the item's classes (AND logic)
+            return niceClassesForBackendFilter.every((selectedCn) =>
+              itemClassNumbers.includes(selectedCn)
+            );
+          }
+          return false; // Item does not have ClassNumber field, so exclude if filters are active
+        });
+        console.log(
+          `GET HANDLER: ${responseData.results.length} results remaining after backend filtering.`
+        );
+      }
+
       console.log(
-        "GET HANDLER: Raw response data from INPI (Full):",
-        JSON.stringify(response.data, null, 2)
+        "GET HANDLER: Final response data to frontend (first 1000 chars):",
+        JSON.stringify(responseData, null, 2).substring(0, 1000)
       );
-      return NextResponse.json(response.data);
+      return NextResponse.json(responseData);
     } catch (error: unknown) {
       logError("GET_handler_searchRequest_catch", error);
       if (
         axios.isAxiosError(error) &&
         (error.response?.status === 401 || error.response?.status === 403)
       ) {
-        console.log(
-          "GET HANDLER: Access token or XSRF token invalid for search, clearing auth cache and retrying search once..."
-        );
         clearAuthCache();
-        try {
-          const newToken = await getAccessToken();
-          const retryResponse = await performSearchV2(newToken, searchPayload);
-
-          console.log(
-            "GET HANDLER: Retry search response status from INPI:",
-            retryResponse.status
-          );
-          console.log(
-            "GET HANDLER: Raw response data from INPI on retry (Full):",
-            JSON.stringify(retryResponse.data, null, 2)
-          );
-          return NextResponse.json(retryResponse.data);
-        } catch (retryError: unknown) {
-          logError("GET_handler_searchRetry_catch", retryError);
-          let rStatus = 500;
-          let rDetails: any = {};
-          if (retryError instanceof APIError) {
-            rStatus = retryError.statusCode;
-            rDetails = retryError.details;
-          } else if (axios.isAxiosError(retryError)) {
-            rStatus = retryError.response?.status || 500;
-            rDetails = retryError.response?.data;
-          }
-          throw new APIError(
-            `GET HANDLER: Failed to retry search: ${
-              retryError instanceof Error
-                ? retryError.message
-                : String(retryError)
-            }`,
-            rStatus,
-            {
-              originalSearchError: { message: (error as Error).message },
-              retryAttemptError: { data: rDetails },
-            }
-          );
-        }
-      }
-      if (axios.isAxiosError(error))
+        // Consider a single retry attempt here if appropriate, or just fail.
+        // For now, failing to avoid complex retry logic here.
         throw new APIError(
-          `GET HANDLER: Search failed: ${
+          `INPI Auth Error on Search: ${
+            error.response?.data?.error_description || error.message
+          }`,
+          error.response?.status || 500,
+          error.response?.data
+        );
+      }
+      if (axios.isAxiosError(error)) {
+        throw new APIError(
+          `INPI Search Failed: ${
             error.response?.data?.error_description ||
             error.response?.data ||
             error.message
           }`,
           error.response?.status || 500,
-          error.response?.data,
-          error.response?.headers
+          error.response?.data
         );
-      throw new APIError("GET HANDLER: Unexpected error during search", 500, {
+      }
+      throw new APIError("Unexpected error during INPI search", 500, {
         errorDetails: String(error),
       });
     }
@@ -445,24 +351,17 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           error: error.message,
-          code:
-            error.statusCode === 401
-              ? "UNAUTHORIZED"
-              : error.statusCode === 403
-              ? "FORBIDDEN"
-              : "INTERNAL_ERROR",
+          code: error.statusCode === 401 ? "UNAUTHORIZED" : "INTERNAL_ERROR",
           details: error.details,
-          timestamp: new Date().toISOString(),
         },
         { status: error.statusCode }
       );
     }
     return NextResponse.json(
       {
-        error: "GET HANDLER: An unexpected internal error occurred.",
+        error: "An unexpected internal error occurred in GET handler.",
         code: "INTERNAL_ERROR",
-        details: error instanceof Error ? error.message : String(error),
-        timestamp: new Date().toISOString(),
+        details: String(error),
       },
       { status: 500 }
     );
