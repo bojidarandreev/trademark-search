@@ -176,6 +176,7 @@ export async function GET(request: Request) {
     let sortFieldFromUrl = searchParams.get("sort") || "relevance";
     let orderFromUrl = searchParams.get("order") || "asc";
     const niceClassesParam = searchParams.get("niceClasses");
+    const originParam = searchParams.get("origin"); // Get Origin param
 
     if (!queryFromUser) {
       return NextResponse.json(
@@ -268,44 +269,102 @@ export async function GET(request: Request) {
 
       let responseData = response.data;
 
-      if (
-        niceClassesForBackendFilter.length > 0 &&
-        responseData &&
-        Array.isArray(responseData.results)
-      ) {
-        console.log(
-          `GET HANDLER: Filtering ${
-            responseData.results.length
-          } results from INPI by Nice Classes: ${niceClassesForBackendFilter.join(
-            ", "
-          )}`
-        );
-        responseData.results = responseData.results.filter((item: any) => {
-          const classNumberField = Array.isArray(item.fields)
-            ? item.fields.find((f: any) => f.name === "ClassNumber")
-            : null;
-          if (classNumberField) {
-            let itemClassesRaw: string[] = [];
-            if (classNumberField.value) {
-              // Single value
-              itemClassesRaw = [classNumberField.value];
-            } else if (Array.isArray(classNumberField.values)) {
-              // Array of values
-              itemClassesRaw = classNumberField.values;
-            }
-            const itemClassNumbers = itemClassesRaw
-              .map((cn) => parseInt(cn, 10))
-              .filter((cn) => !isNaN(cn));
-            // Ensure all selected classes are present in the item's classes (AND logic)
-            return niceClassesForBackendFilter.every((selectedCn) =>
-              itemClassNumbers.includes(selectedCn)
+      // Perform backend filtering
+      if (responseData && Array.isArray(responseData.results)) {
+        const hasNiceClassFilter = niceClassesForBackendFilter.length > 0;
+        const hasOriginFilter =
+          originParam && ["FR", "EU", "WO"].includes(originParam);
+
+        if (hasNiceClassFilter || hasOriginFilter) {
+          console.log(
+            `GET HANDLER: Initial INPI results: ${responseData.results.length}`
+          );
+          if (hasNiceClassFilter)
+            console.log(
+              `Filtering by Nice Classes: ${niceClassesForBackendFilter.join(
+                ", "
+              )}`
             );
-          }
-          return false; // Item does not have ClassNumber field, so exclude if filters are active
-        });
-        console.log(
-          `GET HANDLER: ${responseData.results.length} results remaining after backend filtering.`
-        );
+          if (hasOriginFilter)
+            console.log(`Filtering by Origin: ${originParam}`);
+
+          responseData.results = responseData.results.filter((item: any) => {
+            let matchesNiceClass = !hasNiceClassFilter; // Default to true if no class filter
+            if (hasNiceClassFilter) {
+              const classNumberField = Array.isArray(item.fields)
+                ? item.fields.find((f: any) => f.name === "ClassNumber")
+                : null;
+              if (classNumberField) {
+                let itemClassesRaw: string[] = [];
+                if (classNumberField.value)
+                  itemClassesRaw = [classNumberField.value];
+                else if (Array.isArray(classNumberField.values))
+                  itemClassesRaw = classNumberField.values;
+
+                const itemClassNumbers = itemClassesRaw
+                  .map((cn) => parseInt(cn, 10))
+                  .filter((cn) => !isNaN(cn));
+                matchesNiceClass = niceClassesForBackendFilter.every(
+                  (selectedCn) => itemClassNumbers.includes(selectedCn)
+                );
+              } else {
+                matchesNiceClass = false; // No ClassNumber field, doesn't match if filter active
+              }
+            }
+
+            let matchesOrigin = !hasOriginFilter; // Default to true if no origin filter
+            if (hasOriginFilter) {
+              // The 'origine' field is added by our frontend mapping logic, but that runs client-side.
+              // We need to derive origin from INPI fields here, similar to how frontend does.
+              // Or, more simply, assume the frontend mapping of `item.origine` would be available if we passed all fields.
+              // For now, let's assume the 'ukey' or 'ApplicationNumber' prefix logic is needed here.
+              // This is a simplified version based on 'ukey' for demonstration.
+              // A more robust solution would replicate the frontend's origin derivation logic.
+              let derivedOrigin = "N/A";
+              const ukeyField = Array.isArray(item.fields)
+                ? item.fields.find((f: any) => f.name === "ukey")
+                : null;
+              if (ukeyField && ukeyField.value) {
+                if (ukeyField.value.startsWith("FMARK")) derivedOrigin = "FR";
+                else if (ukeyField.value.startsWith("CTMARK"))
+                  derivedOrigin = "EU";
+                else if (ukeyField.value.startsWith("TMINT"))
+                  derivedOrigin = "WO";
+              }
+              // Add more robust origin detection if needed, like from ApplicationNumber prefix
+              if (derivedOrigin === "N/A") {
+                const appNumForOriginField = Array.isArray(item.fields)
+                  ? item.fields.find((f: any) => f.name === "ApplicationNumber")
+                  : null;
+                if (appNumForOriginField && appNumForOriginField.value) {
+                  const appNum = appNumForOriginField.value;
+                  if (
+                    appNum.length > 2 &&
+                    /^[A-Z]{2}/.test(appNum.substring(0, 2))
+                  ) {
+                    const prefix = appNum.substring(0, 2).toUpperCase();
+                    if (prefix === "FR") derivedOrigin = "FR";
+                    else if (prefix === "EM" || prefix === "EU")
+                      derivedOrigin = "EU"; // EUIPO uses EM for EUTM
+                    else if (prefix === "WO") derivedOrigin = "WO";
+                  } else if (
+                    appNum.startsWith("0") &&
+                    appNum.length >= 8 &&
+                    appNum.length <= 9
+                  ) {
+                    // Older CTMs start with 0
+                    derivedOrigin = "EU";
+                  }
+                }
+              }
+              matchesOrigin = derivedOrigin === originParam;
+            }
+            return matchesNiceClass && matchesOrigin;
+          });
+          console.log(
+            `GET HANDLER: ${responseData.results.length} results remaining after backend filtering.`
+          );
+        }
       }
 
       console.log(

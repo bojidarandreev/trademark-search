@@ -8,8 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Checkbox } from "@/components/ui/checkbox"; // Added for Nice Class filter
-import { Label } from "@/components/ui/label"; // Added for Nice Class filter
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"; // Added for Origin filter
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
@@ -110,18 +111,25 @@ function formatDateDisplay(yyyymmddStr?: string): string {
 
 async function searchTrademarksV2(
   query: string,
-  niceClasses: number[] = [] // Added niceClasses parameter
+  niceClasses: number[] = [],
+  origin: string | null = null // Added origin parameter
 ): Promise<Trademark[]> {
   if (!query.trim()) {
     console.log("Frontend V2 Test Page: Empty query, not fetching.");
     return [];
   }
 
-  let apiUrl = `/api/trademarks/searchV2?q=${encodeURIComponent(query)}`;
+  const params = new URLSearchParams();
+  params.append("q", query);
+
   if (niceClasses.length > 0) {
-    apiUrl += `&niceClasses=${niceClasses.join(",")}`;
+    params.append("niceClasses", niceClasses.join(","));
+  }
+  if (origin) {
+    params.append("origin", origin);
   }
 
+  const apiUrl = `/api/trademarks/searchV2?${params.toString()}`;
   console.log(`Frontend V2 Test Page: Fetching ${apiUrl}`);
   const response = await fetch(apiUrl);
   const rawData = await response.json();
@@ -264,6 +272,7 @@ export default function TrademarkSearchV2TestPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>([]);
+  const [selectedOrigin, setSelectedOrigin] = useState<string | null>(null); // Added state for Origin
   const router = useRouter();
 
   const {
@@ -277,8 +286,10 @@ export default function TrademarkSearchV2TestPage() {
       "trademarksV2Test",
       submittedQuery,
       selectedNiceClasses.join(","),
-    ], // Include selectedNiceClasses in queryKey
-    queryFn: () => searchTrademarksV2(submittedQuery, selectedNiceClasses), // Pass selectedNiceClasses to fetch function
+      selectedOrigin,
+    ], // Include selectedOrigin in queryKey
+    queryFn: () =>
+      searchTrademarksV2(submittedQuery, selectedNiceClasses, selectedOrigin), // Pass selectedOrigin
     enabled: !!submittedQuery,
     retry: 1,
   });
@@ -354,6 +365,27 @@ export default function TrademarkSearchV2TestPage() {
           Selected Classes:{" "}
           {selectedNiceClasses.sort((a, b) => a - b).join(", ") || "None"}
         </p>
+      </div>
+
+      <div className="mb-6">
+        <h2 className="text-xl font-semibold mb-3">Filter by Origin</h2>
+        <RadioGroup
+          value={selectedOrigin || "ALL"}
+          onValueChange={(value) =>
+            setSelectedOrigin(value === "ALL" ? null : value)
+          }
+          className="flex space-x-4"
+        >
+          {["ALL", "FR", "EU", "WO"].map((originValue) => (
+            <div key={originValue} className="flex items-center space-x-2">
+              <RadioGroupItem
+                value={originValue}
+                id={`origin-${originValue}`}
+              />
+              <Label htmlFor={`origin-${originValue}`}>{originValue}</Label>
+            </div>
+          ))}
+        </RadioGroup>
       </div>
 
       <div className="flex gap-2 mb-6">
@@ -451,7 +483,7 @@ export default function TrademarkSearchV2TestPage() {
           </div>
         ) : submittedQuery && !isLoading && !isFetching ? (
           <div className="text-center p-4 text-gray-500">
-            No results found for `{submittedQuery} (V2 Test). Try a different
+            No results found for "{submittedQuery}" (V2 Test). Try a different
             search term.
           </div>
         ) : (
