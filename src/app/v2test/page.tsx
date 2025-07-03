@@ -1,7 +1,13 @@
 "use client";
 
-import { useState, KeyboardEvent, ChangeEvent } from "react";
-import { useRouter } from "next/navigation";
+import {
+  useState,
+  KeyboardEvent,
+  ChangeEvent,
+  useEffect,
+  useCallback,
+} from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"; // Added for Origin filter
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
@@ -63,7 +69,6 @@ const niceClassesList = [
   { id: 45, title: "Class 45: Legal, security, personal services" },
 ];
 
-// Types for the trademark search results
 const trademarkSchema = z.object({
   marque: z.string(),
   dateDepot: z.string(),
@@ -82,9 +87,7 @@ function findFieldValue(
     | undefined,
   fieldName: string
 ): string | undefined {
-  if (!Array.isArray(fields)) {
-    return undefined;
-  }
+  if (!Array.isArray(fields)) return undefined;
   const field = fields.find((f) => f.name === fieldName);
   if (field) {
     if (Array.isArray(field.values) && field.values.length > 0) {
@@ -97,43 +100,33 @@ function findFieldValue(
 }
 
 function formatDateDisplay(yyyymmddStr?: string): string {
-  if (!yyyymmddStr || yyyymmddStr.length !== 8) {
-    return "N/A";
-  }
+  if (!yyyymmddStr || yyyymmddStr.length !== 8) return "N/A";
   const year = yyyymmddStr.substring(0, 4);
   const month = yyyymmddStr.substring(4, 6);
   const day = yyyymmddStr.substring(6, 8);
-  if (isNaN(parseInt(year)) || isNaN(parseInt(month)) || isNaN(parseInt(day))) {
+  if (isNaN(parseInt(year)) || isNaN(parseInt(month)) || isNaN(parseInt(day)))
     return "N/A";
-  }
   return `${day}/${month}/${year}`;
 }
 
 async function searchTrademarksV2(
   query: string,
   niceClasses: number[] = [],
-  origin: string | null = null // Added origin parameter
+  origin: string | null = null
 ): Promise<Trademark[]> {
   if (!query.trim()) {
     console.log("Frontend V2 Test Page: Empty query, not fetching.");
     return [];
   }
-
   const params = new URLSearchParams();
   params.append("q", query);
-
-  if (niceClasses.length > 0) {
+  if (niceClasses.length > 0)
     params.append("niceClasses", niceClasses.join(","));
-  }
-  if (origin) {
-    params.append("origin", origin);
-  }
-
+  if (origin) params.append("origin", origin);
   const apiUrl = `/api/trademarks/searchV2?${params.toString()}`;
   console.log(`Frontend V2 Test Page: Fetching ${apiUrl}`);
   const response = await fetch(apiUrl);
   const rawData = await response.json();
-
   if (!response.ok) {
     console.error("Frontend V2 Test Page: Search API call failed:", {
       status: response.status,
@@ -145,20 +138,13 @@ async function searchTrademarksV2(
         "Failed to fetch trademarks from backend V2 API"
     );
   }
-
   console.log(
     "Frontend V2 Test Page: Raw data received from backend API:",
     JSON.stringify(rawData, null, 2)
   );
-
   if (rawData && Array.isArray(rawData.results)) {
-    const mappedResults: Trademark[] = rawData.results.map((item: any) => {
+    return rawData.results.map((item: any) => {
       const fieldsArray = Array.isArray(item.fields) ? item.fields : [];
-      console.log(
-        `Frontend V2 Test Page: Processing item with fieldsArray:`,
-        JSON.stringify(fieldsArray, null, 2)
-      );
-
       let origine = "N/A";
       const ukey = findFieldValue(fieldsArray, "ukey");
       if (ukey) {
@@ -178,58 +164,38 @@ async function searchTrademarksV2(
           ) {
             const prefix = appNumForOrigin.substring(0, 2).toUpperCase();
             if (prefix === "FR") origine = "FR";
-            else if (prefix === "EU") origine = "EU";
+            else if (prefix === "EU" || prefix === "EM") origine = "EU";
             else if (prefix === "WO") origine = "WO";
-          } else if (appNumForOrigin.startsWith("0")) {
+          } else if (
+            appNumForOrigin.startsWith("0") &&
+            appNumForOrigin.length >= 8 &&
+            appNumForOrigin.length <= 9
+          ) {
             origine = "EU";
           }
         }
       }
-
-      let produitsServicesText = "N/A"; // Default text
+      let produitsServicesText = "N/A";
       const classNumberField = fieldsArray.find(
         (f) => f.name === "ClassNumber"
       );
-
       if (classNumberField) {
         let classNumbers: string[] = [];
-        if (classNumberField.value) {
-          // Handles single value case
-          classNumbers = [classNumberField.value];
-        } else if (
+        if (classNumberField.value) classNumbers = [classNumberField.value];
+        else if (
           Array.isArray(classNumberField.values) &&
           classNumberField.values.length > 0
-        ) {
-          // Handles array of values
+        )
           classNumbers = [...classNumberField.values];
-        }
-
         if (classNumbers.length > 0) {
-          // Sort numbers numerically before joining
-          const sortedClassNumbers = classNumbers
-            .map((cn) => parseInt(cn, 10)) // Convert to numbers for correct sorting
-            .filter((cn) => !isNaN(cn)) // Filter out any NaN values if parsing fails
-            .sort((a, b) => a - b) // Sort numerically
-            .map((cn) => cn.toString()); // Convert back to strings
-          produitsServicesText = sortedClassNumbers.join(", ");
-        } else {
-          console.log(
-            "Frontend V2 Test Page: 'ClassNumber' field found but contained no usable values."
-          );
-          // produitsServicesText remains "N/A"
+          produitsServicesText = classNumbers
+            .map((cn) => parseInt(cn, 10))
+            .filter((cn) => !isNaN(cn))
+            .sort((a, b) => a - b)
+            .map(String)
+            .join(", ");
         }
-      } else {
-        console.log(
-          "Frontend V2 Test Page: No 'ClassNumber' field found for this item."
-        );
-        // produitsServicesText remains "N/A"
       }
-
-      console.log(
-        "Frontend V2 Test Page: Final produitsServicesText (Nice Classification):",
-        produitsServicesText
-      );
-
       let rawDateToFormat = findFieldValue(fieldsArray, "RegistrationDate");
       if (!rawDateToFormat) {
         const pubDateField = fieldsArray.find(
@@ -239,13 +205,11 @@ async function searchTrademarksV2(
           pubDateField &&
           Array.isArray(pubDateField.values) &&
           pubDateField.values.length > 0
-        ) {
+        )
           rawDateToFormat = pubDateField.values[0];
-        } else if (pubDateField && pubDateField.value) {
+        else if (pubDateField && pubDateField.value)
           rawDateToFormat = pubDateField.value;
-        }
       }
-
       return {
         marque: findFieldValue(fieldsArray, "Mark") || "N/A",
         dateDepot: formatDateDisplay(rawDateToFormat),
@@ -257,8 +221,6 @@ async function searchTrademarksV2(
           findFieldValue(fieldsArray, "ApplicationNumber") || undefined,
       };
     });
-    console.log("Frontend V2 Test Page: Mapped results:", mappedResults);
-    return mappedResults;
   } else {
     console.error(
       "Frontend V2 Test Page: API response format error from backend: 'results' array not found or not an array",
@@ -269,11 +231,100 @@ async function searchTrademarksV2(
 }
 
 export default function TrademarkSearchV2TestPage() {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [submittedQuery, setSubmittedQuery] = useState("");
-  const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>([]);
-  const [selectedOrigin, setSelectedOrigin] = useState<string | null>(null); // Added state for Origin
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // State initialized from URL or defaults
+  const [searchQuery, setSearchQuery] = useState(
+    () => searchParams.get("q") || ""
+  );
+  const [submittedQuery, setSubmittedQuery] = useState(
+    () => searchParams.get("q") || ""
+  );
+  const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>(
+    () => {
+      const niceParam = searchParams.get("niceClasses");
+      return niceParam
+        ? niceParam
+            .split(",")
+            .map(Number)
+            .filter((n) => !isNaN(n) && n > 0)
+        : [];
+    }
+  );
+  const [selectedOrigin, setSelectedOrigin] = useState<string | null>(() => {
+    const originParam = searchParams.get("origin");
+    return originParam && ["FR", "EU", "WO"].includes(originParam.toUpperCase())
+      ? originParam.toUpperCase()
+      : null;
+  });
+
+  // Effect to synchronize URL parameters to component state when searchParams change (e.g., browser back/forward)
+  useEffect(() => {
+    const qParam = searchParams.get("q") || "";
+    const niceClassesParam = searchParams.get("niceClasses");
+    const originParam = searchParams.get("origin");
+
+    setSearchQuery(qParam);
+    setSubmittedQuery(qParam);
+    setSelectedNiceClasses(
+      niceClassesParam
+        ? niceClassesParam
+            .split(",")
+            .map(Number)
+            .filter((n) => !isNaN(n) && n > 0)
+        : []
+    );
+    setSelectedOrigin(
+      originParam && ["FR", "EU", "WO"].includes(originParam.toUpperCase())
+        ? originParam.toUpperCase()
+        : null
+    );
+
+    console.log(
+      "State restored from URL: q=",
+      qParam,
+      "niceClasses=",
+      niceClassesParam,
+      "origin=",
+      originParam
+    );
+  }, [searchParams]);
+
+  // Helper function to update URL
+  const updateUrl = useCallback(
+    (newStates: {
+      q?: string;
+      niceClasses?: number[];
+      origin?: string | null;
+    }) => {
+      const currentParams = new URLSearchParams(searchParams.toString());
+
+      if (newStates.q !== undefined) {
+        if (newStates.q) currentParams.set("q", newStates.q);
+        else currentParams.delete("q");
+      }
+      if (newStates.niceClasses !== undefined) {
+        if (newStates.niceClasses.length > 0)
+          currentParams.set("niceClasses", newStates.niceClasses.join(","));
+        else currentParams.delete("niceClasses");
+      }
+      if (newStates.origin !== undefined) {
+        // Check for undefined to allow setting null
+        if (newStates.origin) currentParams.set("origin", newStates.origin);
+        else currentParams.delete("origin");
+      }
+
+      const newPath = `/v2test${
+        currentParams.toString() ? `?${currentParams.toString()}` : ""
+      }`;
+      // Only push if the path is actually different to prevent loops
+      if (window.location.pathname + window.location.search !== newPath) {
+        router.push(newPath, { scroll: false });
+      }
+    },
+    [router, searchParams]
+  ); // Include searchParams to ensure currentParams is fresh
 
   const {
     data: trademarks,
@@ -287,26 +338,29 @@ export default function TrademarkSearchV2TestPage() {
       submittedQuery,
       selectedNiceClasses.join(","),
       selectedOrigin,
-    ], // Include selectedOrigin in queryKey
+    ],
     queryFn: () =>
-      searchTrademarksV2(submittedQuery, selectedNiceClasses, selectedOrigin), // Pass selectedOrigin
+      searchTrademarksV2(submittedQuery, selectedNiceClasses, selectedOrigin),
     enabled: !!submittedQuery,
     retry: 1,
   });
 
   const handleNiceClassChange = (classId: number) => {
-    setSelectedNiceClasses((prevSelectedClasses) =>
-      prevSelectedClasses.includes(classId)
-        ? prevSelectedClasses.filter((id) => id !== classId)
-        : [...prevSelectedClasses, classId]
-    );
+    const newSelectedClasses = selectedNiceClasses.includes(classId)
+      ? selectedNiceClasses.filter((id) => id !== classId)
+      : [...selectedNiceClasses, classId];
+    updateUrl({ niceClasses: newSelectedClasses });
+  };
+
+  const handleOriginChange = (value: string) => {
+    const newOrigin = value === "ALL" ? null : value;
+    updateUrl({ origin: newOrigin });
   };
 
   const handleSearch = () => {
-    if (searchQuery.trim()) {
-      setSubmittedQuery(searchQuery.trim());
-      // query will be re-fetched by react-query due to queryKey change or explicit call if needed
-    }
+    const trimmedQuery = searchQuery.trim();
+    // Update URL, which will then trigger the useEffect[searchParams] to update submittedQuery and other states
+    updateUrl({ q: trimmedQuery });
   };
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -371,9 +425,7 @@ export default function TrademarkSearchV2TestPage() {
         <h2 className="text-xl font-semibold mb-3">Filter by Origin</h2>
         <RadioGroup
           value={selectedOrigin || "ALL"}
-          onValueChange={(value) =>
-            setSelectedOrigin(value === "ALL" ? null : value)
-          }
+          onValueChange={handleOriginChange} // Use the new handler
           className="flex space-x-4"
         >
           {["ALL", "FR", "EU", "WO"].map((originValue) => (
@@ -399,7 +451,8 @@ export default function TrademarkSearchV2TestPage() {
         />
         <Button
           onClick={handleSearch}
-          disabled={!searchQuery.trim() || isLoading || isFetching}
+          // Disable search if searchQuery is empty, to prevent pushing an empty q to URL then clearing results
+          disabled={isLoading || isFetching}
         >
           <Search className="w-4 h-4 mr-2" />
           {isLoading || isFetching ? "Searching (V2)..." : "Search (V2)"}

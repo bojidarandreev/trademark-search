@@ -14,8 +14,6 @@ const INPI_API_BASE_URL = "https://api-gateway.inpi.fr/services/apidiffusion";
 const ACTUAL_MARQUES_METADATA_ENDPOINT = `${INPI_API_BASE_URL}/api/marques/metadata`;
 const ACTUAL_MARQUES_SEARCH_ENDPOINT = `${INPI_API_BASE_URL}/api/marques/search`;
 
-// It's important that apiClientV1.defaults.jar is initialized when inpi-client is imported.
-// We assume it is, as per the structure of inpi-client.ts
 const clientV2 = axios.create({
   baseURL: INPI_API_BASE_URL,
   withCredentials: true,
@@ -27,7 +25,7 @@ async function performSearchV2(
   searchPayload: any
 ): Promise<any> {
   console.log(
-    "<<<<<< performSearchV2 - JULY 2ND - V9 (Backend Filtering Strategy) >>>>>>"
+    "<<<<<< performSearchV2 - Re-implementation (Backend Filtering Strategy) >>>>>>"
   );
 
   let currentGlobalXsrfToken = getXsrfTokenValue();
@@ -35,9 +33,6 @@ async function performSearchV2(
     `PERFORM_SEARCH_V2: Initial global XSRF token before metadata GET: '${
       currentGlobalXsrfToken || "None"
     }'`
-  );
-  console.log(
-    `PERFORM_SEARCH_V2: Attempting preliminary GET to ${ACTUAL_MARQUES_METADATA_ENDPOINT} for search-specific XSRF token.`
   );
 
   let xsrfTokenForPostRequest = currentGlobalXsrfToken;
@@ -76,35 +71,47 @@ async function performSearchV2(
         xsrfTokenForPostRequest
       );
       updateXsrfTokenValue(xsrfTokenForPostRequest);
-      await clientV2.defaults.jar!.setCookie(
-        `XSRF-TOKEN=${xsrfTokenForPostRequest}; Path=/`,
-        ACTUAL_MARQUES_SEARCH_ENDPOINT
-      );
+      if (clientV2.defaults.jar) {
+        // Ensure jar exists
+        await clientV2.defaults.jar.setCookie(
+          `XSRF-TOKEN=${xsrfTokenForPostRequest}; Path=/`,
+          ACTUAL_MARQUES_SEARCH_ENDPOINT
+        );
+      }
     } else {
-      const cookiesInJarAfterMetadataGet =
-        await clientV2.defaults.jar!.getCookies(
-          ACTUAL_MARQUES_METADATA_ENDPOINT
-        );
-      const specificSearchXsrfCookieFromJar = cookiesInJarAfterMetadataGet.find(
-        (c) => c.key === "XSRF-TOKEN" && c.path === "/"
-      );
-      if (specificSearchXsrfCookieFromJar?.value) {
-        const tokenFromJar = decodeURIComponent(
-          specificSearchXsrfCookieFromJar.value
-        );
-        if (tokenFromJar !== xsrfTokenForPostRequest) {
-          xsrfTokenForPostRequest = tokenFromJar;
-          updateXsrfTokenValue(xsrfTokenForPostRequest);
+      if (clientV2.defaults.jar) {
+        // Ensure jar exists
+        const cookiesInJarAfterMetadataGet =
+          await clientV2.defaults.jar.getCookies(
+            ACTUAL_MARQUES_METADATA_ENDPOINT
+          );
+        const specificSearchXsrfCookieFromJar =
+          cookiesInJarAfterMetadataGet.find(
+            (c) => c.key === "XSRF-TOKEN" && c.path === "/"
+          );
+        if (specificSearchXsrfCookieFromJar?.value) {
+          const tokenFromJar = decodeURIComponent(
+            specificSearchXsrfCookieFromJar.value
+          );
+          if (tokenFromJar !== xsrfTokenForPostRequest) {
+            xsrfTokenForPostRequest = tokenFromJar;
+            updateXsrfTokenValue(xsrfTokenForPostRequest);
+            console.log("PERFORM_SEARCH_V2: Updated XSRF token from JAR.");
+          }
+        } else {
+          console.warn(
+            `PERFORM_SEARCH_V2: No new XSRF-TOKEN found from JAR. Using previous: '${
+              xsrfTokenForPostRequest || "None"
+            }'`
+          );
         }
       } else {
         console.warn(
-          `PERFORM_SEARCH_V2: No new XSRF-TOKEN found. Using previous: '${
-            xsrfTokenForPostRequest || "None"
-          }'`
+          `PERFORM_SEARCH_V2: Cookie jar not available on clientV2. Skipping XSRF update from jar.`
         );
-        if (xsrfTokenForPostRequest)
-          updateXsrfTokenValue(xsrfTokenForPostRequest);
       }
+      if (xsrfTokenForPostRequest)
+        updateXsrfTokenValue(xsrfTokenForPostRequest); // Ensure global is set if we had one
     }
   } catch (metaError) {
     logError("performSearchV2_preliminaryGetToMetadata", metaError);
@@ -127,21 +134,30 @@ async function performSearchV2(
   );
 
   let searchPostCookieHeader = "";
-  try {
-    const allCookiesForSearchUrl = await clientV2.defaults.jar!.getCookies(
-      ACTUAL_MARQUES_SEARCH_ENDPOINT
-    );
-    const otherCookieStrings = allCookiesForSearchUrl
-      .filter((cookie) => cookie.key !== "XSRF-TOKEN")
-      .map((cookie) => cookie.cookieString());
-    const finalCookieParts = [...otherCookieStrings];
-    if (xsrfTokenForPostRequest)
-      finalCookieParts.push(`XSRF-TOKEN=${xsrfTokenForPostRequest}`);
-    searchPostCookieHeader = finalCookieParts.join("; ");
-  } catch (e) {
-    console.error(
-      "PERFORM_SEARCH_V2: Error constructing cookie header from jar:",
-      e
+  if (clientV2.defaults.jar) {
+    // Ensure jar exists
+    try {
+      const allCookiesForSearchUrl = await clientV2.defaults.jar.getCookies(
+        ACTUAL_MARQUES_SEARCH_ENDPOINT
+      );
+      const otherCookieStrings = allCookiesForSearchUrl
+        .filter((cookie) => cookie.key !== "XSRF-TOKEN")
+        .map((cookie) => cookie.cookieString());
+      const finalCookieParts = [...otherCookieStrings];
+      if (xsrfTokenForPostRequest)
+        finalCookieParts.push(`XSRF-TOKEN=${xsrfTokenForPostRequest}`);
+      searchPostCookieHeader = finalCookieParts.join("; ");
+    } catch (e) {
+      console.error(
+        "PERFORM_SEARCH_V2: Error constructing cookie header from jar:",
+        e
+      );
+      if (xsrfTokenForPostRequest)
+        searchPostCookieHeader = `XSRF-TOKEN=${xsrfTokenForPostRequest}`;
+    }
+  } else {
+    console.warn(
+      `PERFORM_SEARCH_V2: Cookie jar not available on clientV2. Manual XSRF may be needed if not already in global headers.`
     );
     if (xsrfTokenForPostRequest)
       searchPostCookieHeader = `XSRF-TOKEN=${xsrfTokenForPostRequest}`;
@@ -152,11 +168,15 @@ async function performSearchV2(
     "Content-Type": "application/json",
     Accept: "application/json",
     "User-Agent":
-      "Next.js Trademark Search App/1.0 (Backend Filtering Strategy)",
+      "Next.js Trademark Search App/1.0 (Backend Filtering Strategy - V10)",
   };
   if (xsrfTokenForPostRequest)
     requestHeaders["X-XSRF-TOKEN"] = xsrfTokenForPostRequest;
   if (searchPostCookieHeader) requestHeaders["Cookie"] = searchPostCookieHeader;
+  else if (xsrfTokenForPostRequest && !searchPostCookieHeader) {
+    // If jar failed but we have an XSRF token, ensure it's in the Cookie header as INPI might need it there too
+    requestHeaders["Cookie"] = `XSRF-TOKEN=${xsrfTokenForPostRequest}`;
+  }
 
   return clientV2.post("/api/marques/search", searchPayload, {
     headers: requestHeaders,
@@ -165,7 +185,7 @@ async function performSearchV2(
 
 export async function GET(request: Request) {
   console.log(
-    "<<<<<< GET HANDLER - JULY 2ND - V9 (Backend Filtering Strategy) >>>>>>"
+    "<<<<<< GET HANDLER - Re-implementation (Backend Filtering Strategy V10) >>>>>>"
   );
   try {
     const { searchParams } = new URL(request.url);
@@ -176,7 +196,7 @@ export async function GET(request: Request) {
     let sortFieldFromUrl = searchParams.get("sort") || "relevance";
     let orderFromUrl = searchParams.get("order") || "asc";
     const niceClassesParam = searchParams.get("niceClasses");
-    const originParam = searchParams.get("origin"); // Get Origin param
+    const originParam = searchParams.get("origin");
 
     if (!queryFromUser) {
       return NextResponse.json(
@@ -200,20 +220,16 @@ export async function GET(request: Request) {
         .filter((nc) => !isNaN(nc) && nc > 0 && nc <= 45);
       if (niceClassesForBackendFilter.length > 0) {
         console.log(
-          "GET HANDLER: Nice Classes selected for backend filtering:",
+          "GET HANDLER: Nice Classes for backend filtering:",
           niceClassesForBackendFilter.join(", ")
         );
       }
     }
+    if (originParam) {
+      console.log("GET HANDLER: Origin for backend filtering:", originParam);
+    }
 
-    console.log(
-      "GET HANDLER: Original user query:",
-      queryFromUser,
-      "Processed mark query for INPI:",
-      processedQuery,
-      "Final Solr Query to INPI:",
-      solrQueryForINPI
-    );
+    console.log("GET HANDLER: Solr Query to INPI:", solrQueryForINPI);
 
     let token = await getAccessToken();
     const parsedPage = parseInt(pageFromUser);
@@ -223,7 +239,7 @@ export async function GET(request: Request) {
       orderFromUrl.toLowerCase() === "desc" ? "desc" : "asc";
 
     if (sortFieldFromUrl.toLowerCase() === "relevance") {
-      finalSortField = "APPLICATION_DATE"; // Defaulting to this, INPI might use something like 'score'
+      finalSortField = "APPLICATION_DATE";
       finalSortOrder = "desc";
     } else {
       finalSortField = sortFieldFromUrl.toUpperCase();
@@ -256,40 +272,25 @@ export async function GET(request: Request) {
     };
 
     console.log(
-      "GET HANDLER: Constructed search payload for INPI:",
-      JSON.stringify(searchPayload, null, 2)
+      "GET HANDLER: Payload for INPI:",
+      JSON.stringify(searchPayload, null, 2).substring(0, 500) + "..."
     );
 
     try {
       const response = await performSearchV2(token, searchPayload);
-      console.log(
-        "GET HANDLER: Search response status from INPI:",
-        response.status
-      );
+      console.log("GET HANDLER: INPI response status:", response.status);
 
       let responseData = response.data;
 
-      // Perform backend filtering
       if (responseData && Array.isArray(responseData.results)) {
+        const initialCount = responseData.results.length;
         const hasNiceClassFilter = niceClassesForBackendFilter.length > 0;
         const hasOriginFilter =
-          originParam && ["FR", "EU", "WO"].includes(originParam);
+          originParam && ["FR", "EU", "WO"].includes(originParam.toUpperCase());
 
         if (hasNiceClassFilter || hasOriginFilter) {
-          console.log(
-            `GET HANDLER: Initial INPI results: ${responseData.results.length}`
-          );
-          if (hasNiceClassFilter)
-            console.log(
-              `Filtering by Nice Classes: ${niceClassesForBackendFilter.join(
-                ", "
-              )}`
-            );
-          if (hasOriginFilter)
-            console.log(`Filtering by Origin: ${originParam}`);
-
           responseData.results = responseData.results.filter((item: any) => {
-            let matchesNiceClass = !hasNiceClassFilter; // Default to true if no class filter
+            let matchesNiceClass = !hasNiceClassFilter;
             if (hasNiceClassFilter) {
               const classNumberField = Array.isArray(item.fields)
                 ? item.fields.find((f: any) => f.name === "ClassNumber")
@@ -300,7 +301,6 @@ export async function GET(request: Request) {
                   itemClassesRaw = [classNumberField.value];
                 else if (Array.isArray(classNumberField.values))
                   itemClassesRaw = classNumberField.values;
-
                 const itemClassNumbers = itemClassesRaw
                   .map((cn) => parseInt(cn, 10))
                   .filter((cn) => !isNaN(cn));
@@ -308,18 +308,12 @@ export async function GET(request: Request) {
                   (selectedCn) => itemClassNumbers.includes(selectedCn)
                 );
               } else {
-                matchesNiceClass = false; // No ClassNumber field, doesn't match if filter active
+                matchesNiceClass = false;
               }
             }
 
-            let matchesOrigin = !hasOriginFilter; // Default to true if no origin filter
+            let matchesOrigin = !hasOriginFilter;
             if (hasOriginFilter) {
-              // The 'origine' field is added by our frontend mapping logic, but that runs client-side.
-              // We need to derive origin from INPI fields here, similar to how frontend does.
-              // Or, more simply, assume the frontend mapping of `item.origine` would be available if we passed all fields.
-              // For now, let's assume the 'ukey' or 'ApplicationNumber' prefix logic is needed here.
-              // This is a simplified version based on 'ukey' for demonstration.
-              // A more robust solution would replicate the frontend's origin derivation logic.
               let derivedOrigin = "N/A";
               const ukeyField = Array.isArray(item.fields)
                 ? item.fields.find((f: any) => f.name === "ukey")
@@ -331,13 +325,12 @@ export async function GET(request: Request) {
                 else if (ukeyField.value.startsWith("TMINT"))
                   derivedOrigin = "WO";
               }
-              // Add more robust origin detection if needed, like from ApplicationNumber prefix
               if (derivedOrigin === "N/A") {
-                const appNumForOriginField = Array.isArray(item.fields)
+                const appNumField = Array.isArray(item.fields)
                   ? item.fields.find((f: any) => f.name === "ApplicationNumber")
                   : null;
-                if (appNumForOriginField && appNumForOriginField.value) {
-                  const appNum = appNumForOriginField.value;
+                if (appNumField && appNumField.value) {
+                  const appNum = appNumField.value;
                   if (
                     appNum.length > 2 &&
                     /^[A-Z]{2}/.test(appNum.substring(0, 2))
@@ -345,50 +338,39 @@ export async function GET(request: Request) {
                     const prefix = appNum.substring(0, 2).toUpperCase();
                     if (prefix === "FR") derivedOrigin = "FR";
                     else if (prefix === "EM" || prefix === "EU")
-                      derivedOrigin = "EU"; // EUIPO uses EM for EUTM
+                      derivedOrigin = "EU";
                     else if (prefix === "WO") derivedOrigin = "WO";
                   } else if (
                     appNum.startsWith("0") &&
                     appNum.length >= 8 &&
                     appNum.length <= 9
                   ) {
-                    // Older CTMs start with 0
                     derivedOrigin = "EU";
                   }
                 }
               }
-              matchesOrigin = derivedOrigin === originParam;
+              matchesOrigin = derivedOrigin === originParam; // originParam is already uppercase or null from frontend
             }
             return matchesNiceClass && matchesOrigin;
           });
           console.log(
-            `GET HANDLER: ${responseData.results.length} results remaining after backend filtering.`
+            `GET HANDLER: Filtered ${initialCount} results down to ${
+              responseData.results.length
+            }. Nice: ${niceClassesForBackendFilter.join(",")}, Origin: ${
+              originParam || "All"
+            }`
           );
         }
+      } else {
+        // Ensure results is an array even if INPI returns something else or no results key
+        responseData = { ...responseData, results: [] };
       }
 
-      console.log(
-        "GET HANDLER: Final response data to frontend (first 1000 chars):",
-        JSON.stringify(responseData, null, 2).substring(0, 1000)
-      );
       return NextResponse.json(responseData);
     } catch (error: unknown) {
-      logError("GET_handler_searchRequest_catch", error);
-      if (
-        axios.isAxiosError(error) &&
-        (error.response?.status === 401 || error.response?.status === 403)
-      ) {
-        clearAuthCache();
-        // Consider a single retry attempt here if appropriate, or just fail.
-        // For now, failing to avoid complex retry logic here.
-        throw new APIError(
-          `INPI Auth Error on Search: ${
-            error.response?.data?.error_description || error.message
-          }`,
-          error.response?.status || 500,
-          error.response?.data
-        );
-      }
+      logError("GET_handler_searchRequest_catch", error); // Centralized logging
+      // Re-throw as APIError or allow default Next.js error handling
+      if (error instanceof APIError) throw error; // Re-throw if already an APIError
       if (axios.isAxiosError(error)) {
         throw new APIError(
           `INPI Search Failed: ${
@@ -400,18 +382,21 @@ export async function GET(request: Request) {
           error.response?.data
         );
       }
-      throw new APIError("Unexpected error during INPI search", 500, {
-        errorDetails: String(error),
-      });
+      throw new APIError(
+        "Unexpected error during INPI search processing",
+        500,
+        { errorDetails: String(error) }
+      );
     }
   } catch (error: unknown) {
-    logError("GET_handler_main_catch", error);
+    logError("GET_handler_main_catch", error); // Log error from the main try block
     if (error instanceof APIError) {
       return NextResponse.json(
         {
           error: error.message,
           code: error.statusCode === 401 ? "UNAUTHORIZED" : "INTERNAL_ERROR",
           details: error.details,
+          timestamp: new Date().toISOString(),
         },
         { status: error.statusCode }
       );
@@ -421,6 +406,7 @@ export async function GET(request: Request) {
         error: "An unexpected internal error occurred in GET handler.",
         code: "INTERNAL_ERROR",
         details: String(error),
+        timestamp: new Date().toISOString(),
       },
       { status: 500 }
     );
