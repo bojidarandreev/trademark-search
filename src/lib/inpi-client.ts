@@ -1,6 +1,6 @@
 import axios, { AxiosError, AxiosInstance } from "axios";
 import { wrapper } from "axios-cookiejar-support";
-import tough from "tough-cookie";
+import * as tough from "tough-cookie";
 import { Cookie } from "tough-cookie";
 
 // Constants from the original file that getAccessToken might need
