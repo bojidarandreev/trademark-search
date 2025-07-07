@@ -15,12 +15,12 @@ import axios from "axios"; // For AxiosError type checking
 const INPI_API_BASE_URL = "https://api-gateway.inpi.fr";
 
 export async function GET(
-  request: NextRequest, // Changed Request to NextRequest
-  context: { params: Promise<{ id: string }> }
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> } // Destructured params promise
 ) {
   // To address the "params should be awaited" warning, ensure context.params is accessed correctly.
   // For Route Handlers, context.params is directly available.
-  const { id } = await context.params;
+  const { id } = await params; // Await the destructured params
 
   if (!id) {
     return NextResponse.json(

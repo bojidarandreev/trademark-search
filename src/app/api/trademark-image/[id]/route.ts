@@ -12,10 +12,10 @@ const INPI_IMAGE_BASE_URL =
   "https://api-gateway.inpi.fr/services/apidiffusion/api/marques/image";
 
 export async function GET(
-  request: NextRequest, // Changed Request to NextRequest
-  context: { params: Promise<{ id: string }> }
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> } // Destructured params promise
 ) {
-  const { id } = await context.params;
+  const { id } = await params; // Await the destructured params
 
   if (!id) {
     return NextResponse.json(
