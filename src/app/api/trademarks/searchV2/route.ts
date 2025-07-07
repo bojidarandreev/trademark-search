@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import axios, { AxiosError } from "axios";
+import axios, { AxiosResponse } from "axios";
 import {
   client as apiClientV1, // Using existing client for cookie jar and auth logic
   getAccessToken,
@@ -7,12 +7,38 @@ import {
   logError,
   getXsrfTokenValue,
   updateXsrfTokenValue,
-  clearAuthCache,
+  // clearAuthCache, // Unused
 } from "@/lib/inpi-client";
 
 const INPI_API_BASE_URL = "https://api-gateway.inpi.fr/services/apidiffusion";
 const ACTUAL_MARQUES_METADATA_ENDPOINT = `${INPI_API_BASE_URL}/api/marques/metadata`;
 const ACTUAL_MARQUES_SEARCH_ENDPOINT = `${INPI_API_BASE_URL}/api/marques/search`;
+
+// Define interfaces based on usage in this file and the previous one
+interface SearchPayload {
+  query: string;
+  position: number;
+  size: number;
+  collections: string[];
+  fields: string[];
+  sortList: string[];
+}
+
+interface InpiField {
+  name: string;
+  value?: string;
+  values?: string[];
+}
+
+interface InpiResultItem {
+  fields: InpiField[];
+  // Define other known properties of a result item if available
+}
+
+interface InpiSearchResponseData {
+  results: InpiResultItem[];
+  // Define other known properties of the response data, e.g., total, page, etc.
+}
 
 const clientV2 = axios.create({
   baseURL: INPI_API_BASE_URL,
@@ -22,18 +48,18 @@ const clientV2 = axios.create({
 
 async function performSearchV2(
   bearerToken: string,
-  searchPayload: any
-): Promise<any> {
+  searchPayload: SearchPayload
+): Promise<AxiosResponse<InpiSearchResponseData>> {
   console.log(
     "<<<<<< performSearchV2 - Re-implementation (Backend Filtering Strategy V11) >>>>>>"
   );
 
-  let currentGlobalXsrfToken = getXsrfTokenValue();
+  const currentGlobalXsrfToken = getXsrfTokenValue(); // Should be const
   // console.log( // Too verbose for regular operation
   //   `PERFORM_SEARCH_V2: Initial global XSRF token before metadata GET: '${currentGlobalXsrfToken || "None"}'`
   // );
 
-  let xsrfTokenForPostRequest = currentGlobalXsrfToken;
+  let xsrfTokenForPostRequest = currentGlobalXsrfToken; // This one is potentially reassigned
 
   try {
     const metadataResponse = await clientV2.get("/api/marques/metadata", {
@@ -177,8 +203,8 @@ export async function GET(request: Request) {
     const pageFromUser = searchParams.get("page") || "1";
     const nbResultsPerPageFromUser =
       searchParams.get("nbResultsPerPage") || "20";
-    let sortFieldFromUrl = searchParams.get("sort") || "relevance";
-    let orderFromUrl = searchParams.get("order") || "asc";
+    const sortFieldFromUrl = searchParams.get("sort") || "relevance"; // prefer-const
+    const orderFromUrl = searchParams.get("order") || "asc"; // prefer-const
 
     const niceClassesParam = searchParams.get("niceClasses");
     const originParam = searchParams.get("origin");
@@ -226,7 +252,7 @@ export async function GET(request: Request) {
     }
     console.log("GET HANDLER: Solr Query to INPI:", solrQueryForINPI);
 
-    let token = await getAccessToken();
+    const token = await getAccessToken(); // prefer-const
     const parsedPage = parseInt(pageFromUser);
     const parsedNbResultsPerPage = parseInt(nbResultsPerPageFromUser);
     let finalSortField: string;
@@ -240,7 +266,8 @@ export async function GET(request: Request) {
       finalSortField = sortFieldFromUrl.toUpperCase();
     }
 
-    const searchPayload: any = {
+    const searchPayload: SearchPayload = {
+      // Use SearchPayload type
       query: solrQueryForINPI,
       position: (parsedPage - 1) * parsedNbResultsPerPage,
       size: parsedNbResultsPerPage, // Fetch more for backend filtering if needed, or implement pagination on filtered results later
@@ -281,80 +308,85 @@ export async function GET(request: Request) {
           originParam && ["FR", "EU", "WO"].includes(originParam.toUpperCase());
 
         if (hasNiceClassFilter || hasOriginFilter) {
-          responseData.results = responseData.results.filter((item: any) => {
-            let matchesNiceClass = !hasNiceClassFilter; // Default to true if no Nice Class filter
-            if (hasNiceClassFilter) {
-              const classNumberField = Array.isArray(item.fields)
-                ? item.fields.find((f: any) => f.name === "ClassNumber")
-                : null;
-              if (classNumberField) {
-                let itemClassesRaw: string[] = [];
-                if (classNumberField.value)
-                  itemClassesRaw = [classNumberField.value];
-                else if (Array.isArray(classNumberField.values))
-                  itemClassesRaw = classNumberField.values;
-                const itemClassNumbers = itemClassesRaw
-                  .map((cn) => parseInt(cn, 10))
-                  .filter((cn) => !isNaN(cn));
-
-                if (niceLogicParam === "OR") {
-                  matchesNiceClass = niceClassesForBackendFilter.some(
-                    (selectedCn) => itemClassNumbers.includes(selectedCn)
-                  );
-                } else {
-                  // Default to AND
-                  matchesNiceClass = niceClassesForBackendFilter.every(
-                    (selectedCn) => itemClassNumbers.includes(selectedCn)
-                  );
-                }
-              } else {
-                matchesNiceClass = false; // Item has no class numbers, so cannot match if filter is active
-              }
-            }
-
-            let matchesOrigin = !hasOriginFilter; // Default to true if no Origin filter
-            if (hasOriginFilter) {
-              let derivedOrigin = "N/A";
-              const ukeyField = Array.isArray(item.fields)
-                ? item.fields.find((f: any) => f.name === "ukey")
-                : null;
-              if (ukeyField && ukeyField.value) {
-                if (ukeyField.value.startsWith("FMARK")) derivedOrigin = "FR";
-                else if (ukeyField.value.startsWith("CTMARK"))
-                  derivedOrigin = "EU";
-                else if (ukeyField.value.startsWith("TMINT"))
-                  derivedOrigin = "WO";
-              }
-              if (derivedOrigin === "N/A") {
-                // Fallback if ukey is not definitive
-                const appNumField = Array.isArray(item.fields)
-                  ? item.fields.find((f: any) => f.name === "ApplicationNumber")
+          responseData.results = responseData.results.filter(
+            (item: InpiResultItem) => {
+              // Use InpiResultItem type
+              let matchesNiceClass = !hasNiceClassFilter; // Default to true if no Nice Class filter
+              if (hasNiceClassFilter) {
+                const classNumberField = Array.isArray(item.fields)
+                  ? item.fields.find((f: InpiField) => f.name === "ClassNumber") // Use InpiField type
                   : null;
-                if (appNumField && appNumField.value) {
-                  const appNum = appNumField.value;
-                  if (
-                    appNum.length > 2 &&
-                    /^[A-Z]{2}/.test(appNum.substring(0, 2))
-                  ) {
-                    const prefix = appNum.substring(0, 2).toUpperCase();
-                    if (prefix === "FR") derivedOrigin = "FR";
-                    else if (prefix === "EM" || prefix === "EU")
-                      derivedOrigin = "EU";
-                    else if (prefix === "WO") derivedOrigin = "WO";
-                  } else if (
-                    appNum.startsWith("0") &&
-                    appNum.length >= 8 &&
-                    appNum.length <= 9
-                  ) {
-                    // EUIPO numbers can start with 0
+                if (classNumberField) {
+                  let itemClassesRaw: string[] = [];
+                  if (classNumberField.value)
+                    itemClassesRaw = [classNumberField.value];
+                  else if (Array.isArray(classNumberField.values))
+                    itemClassesRaw = classNumberField.values;
+                  const itemClassNumbers = itemClassesRaw
+                    .map((cn) => parseInt(cn, 10))
+                    .filter((cn) => !isNaN(cn));
+
+                  if (niceLogicParam === "OR") {
+                    matchesNiceClass = niceClassesForBackendFilter.some(
+                      (selectedCn) => itemClassNumbers.includes(selectedCn)
+                    );
+                  } else {
+                    // Default to AND
+                    matchesNiceClass = niceClassesForBackendFilter.every(
+                      (selectedCn) => itemClassNumbers.includes(selectedCn)
+                    );
+                  }
+                } else {
+                  matchesNiceClass = false; // Item has no class numbers, so cannot match if filter is active
+                }
+              }
+
+              let matchesOrigin = !hasOriginFilter; // Default to true if no Origin filter
+              if (hasOriginFilter) {
+                let derivedOrigin = "N/A";
+                const ukeyField = Array.isArray(item.fields)
+                  ? item.fields.find((f: InpiField) => f.name === "ukey") // Use InpiField type
+                  : null;
+                if (ukeyField && ukeyField.value) {
+                  if (ukeyField.value.startsWith("FMARK")) derivedOrigin = "FR";
+                  else if (ukeyField.value.startsWith("CTMARK"))
                     derivedOrigin = "EU";
+                  else if (ukeyField.value.startsWith("TMINT"))
+                    derivedOrigin = "WO";
+                }
+                if (derivedOrigin === "N/A") {
+                  // Fallback if ukey is not definitive
+                  const appNumField = Array.isArray(item.fields)
+                    ? item.fields.find(
+                        (f: InpiField) => f.name === "ApplicationNumber"
+                      ) // Use InpiField type
+                    : null;
+                  if (appNumField && appNumField.value) {
+                    const appNum = appNumField.value;
+                    if (
+                      appNum.length > 2 &&
+                      /^[A-Z]{2}/.test(appNum.substring(0, 2))
+                    ) {
+                      const prefix = appNum.substring(0, 2).toUpperCase();
+                      if (prefix === "FR") derivedOrigin = "FR";
+                      else if (prefix === "EM" || prefix === "EU")
+                        derivedOrigin = "EU";
+                      else if (prefix === "WO") derivedOrigin = "WO";
+                    } else if (
+                      appNum.startsWith("0") &&
+                      appNum.length >= 8 &&
+                      appNum.length <= 9
+                    ) {
+                      // EUIPO numbers can start with 0
+                      derivedOrigin = "EU";
+                    }
                   }
                 }
+                matchesOrigin = derivedOrigin === originParam;
               }
-              matchesOrigin = derivedOrigin === originParam;
+              return matchesNiceClass && matchesOrigin;
             }
-            return matchesNiceClass && matchesOrigin;
-          });
+          );
           console.log(
             `GET HANDLER: Filtered ${initialCount} INPI results down to ${
               responseData.results.length

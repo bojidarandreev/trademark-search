@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import axios, { AxiosError } from "axios"; // AxiosError might be needed for type checks
+import axios, { AxiosResponse } from "axios"; // AxiosError might be needed for type checks
 import {
   client,
   getAccessToken,
@@ -9,7 +9,7 @@ import {
   updateXsrfTokenValue,
   clearAuthCache,
 } from "@/lib/inpi-client"; // Assuming @/lib path alias is configured or use relative path
-import { Cookie } from "tough-cookie"; // Still needed if performSearch inspects cookies directly, but likely not
+// import { Cookie } from "tough-cookie"; // Still needed if performSearch inspects cookies directly, but likely not
 
 // INPI API Base URL - can be local or imported if also shared, but usually static per route context
 const INPI_API_BASE_URL = "https://api-gateway.inpi.fr";
@@ -17,10 +17,20 @@ const INPI_API_BASE_URL = "https://api-gateway.inpi.fr";
 const INPI_SEARCH_URL = `${INPI_API_BASE_URL}/services/apidiffusion/api/marques/search`;
 const INPI_MARQUES_METADATA_URL = `${INPI_API_BASE_URL}/services/apidiffusion/api/marques/metadata`;
 
+interface SearchPayload {
+  query: string;
+  position: number;
+  size: number;
+  collections: string[];
+  fields: string[];
+  sortList: string[];
+}
+
 async function performSearch(
   bearerToken: string,
-  searchPayload: any
-): Promise<any> {
+  searchPayload: SearchPayload
+): Promise<AxiosResponse<unknown>> {
+  // Changed any to unknown
   let currentSearchXsrfToken = getXsrfTokenValue();
   console.log(
     `Attempting preliminary GET to ${INPI_MARQUES_METADATA_URL} for search-specific XSRF token.`
@@ -83,8 +93,8 @@ export async function GET(request: Request) {
     const pageFromUser = searchParams.get("page") || "1";
     const nbResultsPerPageFromUser =
       searchParams.get("nbResultsPerPage") || "20";
-    let sortFieldFromUrl = searchParams.get("sort") || "relevance";
-    let orderFromUrl = searchParams.get("order") || "asc";
+    const sortFieldFromUrl = searchParams.get("sort") || "relevance";
+    const orderFromUrl = searchParams.get("order") || "asc";
 
     if (!queryFromUser) {
       return NextResponse.json(
@@ -101,7 +111,7 @@ export async function GET(request: Request) {
       "Order:",
       orderFromUrl
     );
-    let token = await getAccessToken(); // Uses shared getAccessToken
+    const token = await getAccessToken(); // Uses shared getAccessToken
     console.log("Got access token, preparing search request...");
 
     const parsedPage = parseInt(pageFromUser);
@@ -122,7 +132,7 @@ export async function GET(request: Request) {
       console.log(`Using user sort: '${finalSortField} ${finalSortOrder}'`);
     }
 
-    const searchPayload: any = {
+    const searchPayload: SearchPayload = {
       query: `[Mark=${queryFromUser}]`,
       position: (parsedPage - 1) * parsedNbResultsPerPage,
       size: parsedNbResultsPerPage,
@@ -161,10 +171,10 @@ export async function GET(request: Request) {
           "Snippet of INPI data (first 1000 chars):",
           JSON.stringify(response.data, null, 2).substring(0, 1000)
         );
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error(
           "Could not stringify response.data from INPI:",
-          e.message
+          e instanceof Error ? e.message : String(e)
         );
         console.log("Raw response.data from INPI:", response.data);
       }
@@ -184,17 +194,15 @@ export async function GET(request: Request) {
           const newToken = await getAccessToken(); // Re-authenticates
 
           // Re-calculate sort for retry payload
-          let retrySortField = sortFieldFromUrl;
-          let retrySortOrder = orderFromUrl;
-          if (sortFieldFromUrl.toLowerCase() === "relevance") {
-            retrySortField = "APPLICATION_DATE";
-            retrySortOrder = "desc";
-          }
-          retrySortField = retrySortField.toUpperCase();
+          // No need to redefine retrySortField, retrySortOrder as sortFieldFromUrl, orderFromUrl are const
+          // finalSortField and finalSortOrder are already calculated correctly based on them.
+          // The payload needs to use the correct finalSortField and finalSortOrder from the outer scope.
 
-          const retrySearchPayload = {
-            ...searchPayload,
-            sortList: [`${retrySortField} ${retrySortOrder}`],
+          const retrySearchPayload: SearchPayload = {
+            // Use SearchPayload type
+            ...searchPayload, // Spread the original payload
+            // Ensure sortList uses the correctly determined finalSortField and finalSortOrder
+            sortList: [`${finalSortField} ${finalSortOrder}`],
           };
           console.log(
             "Constructed retry search payload:",
@@ -222,10 +230,10 @@ export async function GET(request: Request) {
               "Snippet of INPI data on retry (first 1000 chars):",
               JSON.stringify(retryResponse.data, null, 2).substring(0, 1000)
             );
-          } catch (e: any) {
+          } catch (e: unknown) {
             console.error(
               "Could not stringify retryResponse.data from INPI:",
-              e.message
+              e instanceof Error ? e.message : String(e)
             );
             console.log(
               "Raw retryResponse.data from INPI:",
@@ -237,7 +245,7 @@ export async function GET(request: Request) {
         } catch (retryError: unknown) {
           logError("searchRetry", retryError);
           let rStatus = 500;
-          let rDetails: any = {};
+          let rDetails: unknown = {}; // Use unknown
           if (retryError instanceof APIError) {
             rStatus = retryError.statusCode;
             rDetails = retryError.details;
@@ -253,7 +261,9 @@ export async function GET(request: Request) {
             }`,
             rStatus,
             {
-              originalSearchError: { message: (error as Error).message },
+              originalSearchError: {
+                message: error instanceof Error ? error.message : String(error),
+              }, // Handle error type
               retryAttemptError: { data: rDetails },
             }
           );
@@ -263,7 +273,7 @@ export async function GET(request: Request) {
         throw new APIError(
           `Search failed: ${
             error.response?.data?.error_description ||
-            error.response?.data ||
+            error.response?.data || // data could be anything, stringify might be safer if not an object
             error.message
           }`,
           error.response?.status || 500,

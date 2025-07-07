@@ -20,6 +20,18 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
+// Define interfaces for the raw data structure from the API (similar to page.tsx)
+interface InpiField {
+  name: string;
+  value?: string | Record<string, unknown> | Array<Record<string, unknown>>; // Changed any to unknown
+  values?: string[];
+}
+
+interface RawInpiResultItem {
+  fields: InpiField[];
+  xml?: { href?: string };
+}
+
 // Nice Classification Classes (Hardcoded)
 const niceClassesList = [
   { id: 1, title: "Class 1: Chemicals, resins, plastics" },
@@ -69,7 +81,9 @@ const niceClassesList = [
   { id: 45, title: "Class 45: Legal, security, personal services" },
 ];
 
-const trademarkSchema = z.object({
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _trademarkSchema = z.object({
+  // Prefixed with underscore
   marque: z.string(),
   dateDepot: z.string(),
   produitsServices: z.string(),
@@ -79,12 +93,10 @@ const trademarkSchema = z.object({
   applicationNumber: z.string().optional(),
 });
 
-type Trademark = z.infer<typeof trademarkSchema>;
+type Trademark = z.infer<typeof _trademarkSchema>; // Use underscored name
 
 function findFieldValue(
-  fields:
-    | Array<{ name: string; value?: string; values?: string[] }>
-    | undefined,
+  fields: InpiField[] | undefined, // Use InpiField type
   fieldName: string
 ): string | undefined {
   if (!Array.isArray(fields)) return undefined;
@@ -156,8 +168,11 @@ async function searchTrademarksV2(
   }
   // console.log("Frontend V2 Test Page: Raw data received from backend API:", JSON.stringify(rawData, null, 2)); // Optional: too verbose for now
   if (rawData && Array.isArray(rawData.results)) {
-    return rawData.results.map((item: any) => {
-      const fieldsArray = Array.isArray(item.fields) ? item.fields : [];
+    return rawData.results.map((item: RawInpiResultItem) => {
+      // Use RawInpiResultItem type
+      const fieldsArray: InpiField[] = Array.isArray(item.fields)
+        ? item.fields
+        : []; // Ensure fieldsArray is InpiField[]
       let origine = "N/A";
       const ukey = findFieldValue(fieldsArray, "ukey");
       if (ukey) {
@@ -628,8 +643,8 @@ export default function TrademarkSearchV2TestPage() {
           </div>
         ) : submittedQuery && !isLoading && !isFetching ? (
           <div className="text-center p-4 text-gray-500">
-            No results found for "{submittedQuery}" (V2 Test). Try a different
-            search term.
+            No results found for &quot;{submittedQuery}&quot; (V2 Test). Try a
+            different search term.
           </div>
         ) : (
           <div className="text-center p-4 text-gray-400">

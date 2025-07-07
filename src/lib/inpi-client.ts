@@ -1,4 +1,4 @@
-import axios, { AxiosError, AxiosInstance } from "axios";
+import axios, { AxiosInstance } from "axios"; // Removed AxiosError
 import { wrapper } from "axios-cookiejar-support";
 import * as tough from "tough-cookie";
 import { Cookie } from "tough-cookie";
@@ -28,8 +28,8 @@ export class APIError extends Error {
   constructor(
     message: string,
     public statusCode: number,
-    public details?: any,
-    public responseHeaders?: any
+    public details?: unknown, // Changed to unknown
+    public responseHeaders?: Record<string, unknown> // Changed to Record<string, unknown>
   ) {
     super(message);
     this.name = "APIError";
@@ -37,8 +37,17 @@ export class APIError extends Error {
 }
 
 // Helper function to log detailed error information
-export function logError(context: string, error: any) {
-  const errorDetails: any = { context, message: error.message };
+export function logError(context: string, error: unknown) {
+  // Changed to unknown
+  const errorDetails: {
+    context: string;
+    message?: string;
+    [key: string]: unknown;
+  } = { context };
+  if (error instanceof Error) {
+    errorDetails.message = error.message;
+  }
+
   if (axios.isAxiosError(error)) {
     errorDetails.status = error.response?.status;
     errorDetails.statusText = error.response?.statusText;

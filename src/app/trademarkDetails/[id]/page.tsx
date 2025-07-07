@@ -6,6 +6,67 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft } from "lucide-react";
+import Image from "next/image"; // Import next/image
+
+// Detailed interfaces for the API response structure
+interface TextValue {
+  _text?: string;
+}
+
+interface FormattedName {
+  FirstName?: string | TextValue;
+  LastName?: string | TextValue;
+  OrganizationName?: string | TextValue;
+  FormattedName?: string | TextValue | FormattedName; // Can be recursive or simple
+}
+
+interface FormattedAddress {
+  AddressLine?: string | TextValue | Array<string | TextValue>;
+  AddressCity?: string | TextValue;
+  AddressPostcode?: string | TextValue;
+  AddressCountryCode?: string | TextValue;
+  FormattedAddressCountryCode?: string | TextValue; // fallback
+}
+
+interface FreeFormatAddress {
+  FreeFormatAddressLine?: string | TextValue | Array<string | TextValue>;
+}
+
+interface AddressDetails {
+  FormattedAddress?: FormattedAddress;
+  FreeFormatAddress?: FreeFormatAddress;
+}
+
+interface NameAddress {
+  Name?: FormattedName;
+  Address?: AddressDetails;
+}
+
+interface AddressBook {
+  FormattedNameAddress?: NameAddress;
+  PostalAddress?: string; // Seems to be a newline-separated string
+}
+
+interface Party {
+  ApplicantAddressBook?: AddressBook;
+  RepresentativeAddressBook?: AddressBook;
+  ApplicantIdentifier?: string; // Fallback identifier
+  // Other party-specific fields if any
+}
+
+interface GoodsServicesDescriptionEntry {
+  _text?: string;
+  // It can also be a plain string
+}
+
+interface ClassDescription {
+  ClassNumber?: string | TextValue;
+  GoodsServicesDescription?:
+    | string
+    | TextValue
+    | GoodsServicesDescriptionEntry
+    | Array<string | TextValue | GoodsServicesDescriptionEntry>;
+}
 
 interface TrademarkNoticeWrapper {
   TradeMark?: TrademarkDetailData;
@@ -22,15 +83,15 @@ interface TrademarkDetailData {
     MarkVerbalElementText?: string;
   };
   ApplicantDetails?: {
-    Applicant?: any | any[];
+    Applicant?: Party | Party[];
   };
   RepresentativeDetails?: {
-    Representative?: any | any[];
+    Representative?: Party | Party[];
   };
   GoodsServicesDetails?: {
     GoodsServices?: {
       ClassDescriptionDetails?: {
-        ClassDescription?: any | any[];
+        ClassDescription?: ClassDescription | ClassDescription[];
       };
     };
   };
@@ -39,7 +100,8 @@ interface TrademarkDetailData {
       MarkImageFilename?: string;
     };
   };
-  [key: string]: any;
+  // Removed [key: string]: any; to be more specific.
+  // Add other known top-level properties of TradeMark object if they exist.
 }
 
 function formatDateDisplay(dateStr?: string): string {
@@ -97,7 +159,7 @@ async function fetchTrademarkNoticeDetails(
 }
 
 const renderPartyDetails = (
-  party: any,
+  party: Party, // Use Party type
   partyType: "Applicant" | "Representative"
 ) => {
   if (!party) return <p>N/A</p>;
@@ -149,15 +211,26 @@ const renderPartyDetails = (
       const addr = nameAddr.Address.FormattedAddress;
       const addressParts = [
         Array.isArray(addr.AddressLine)
-          ? addr.AddressLine.map((line: any) =>
-              typeof line === "string" ? line : line._text
+          ? addr.AddressLine.map(
+              (
+                line: string | TextValue // Use string | TextValue
+              ) => (typeof line === "string" ? line : line._text)
             ).join(", ")
           : typeof addr.AddressLine === "string"
           ? addr.AddressLine
-          : addr.AddressLine?._text,
-        addr.AddressCity,
-        addr.AddressPostcode,
-        addr.AddressCountryCode || addr.FormattedAddressCountryCode,
+          : (addr.AddressLine as TextValue)?._text, // Type assertion for TextValue
+        typeof addr.AddressCity === "string"
+          ? addr.AddressCity
+          : (addr.AddressCity as TextValue)?._text,
+        typeof addr.AddressPostcode === "string"
+          ? addr.AddressPostcode
+          : (addr.AddressPostcode as TextValue)?._text,
+        (typeof addr.AddressCountryCode === "string"
+          ? addr.AddressCountryCode
+          : (addr.AddressCountryCode as TextValue)?._text) ||
+          (typeof addr.FormattedAddressCountryCode === "string"
+            ? addr.FormattedAddressCountryCode
+            : (addr.FormattedAddressCountryCode as TextValue)?._text),
       ].filter(Boolean);
       if (addressParts.length > 0) displayAddress = addressParts.join(", ");
     } else if (
@@ -169,11 +242,17 @@ const renderPartyDetails = (
       const ffLines = nameAddr.Address.FreeFormatAddress.FreeFormatAddressLine;
       displayAddress = (
         Array.isArray(ffLines)
-          ? ffLines.map((line: any) =>
-              typeof line === "string" ? line : line._text
+          ? ffLines.map(
+              (
+                line: string | TextValue // Use string | TextValue
+              ) => (typeof line === "string" ? line : line._text)
             )
-          : [typeof ffLines === "string" ? ffLines : ffLines?._text]
-      )
+          : [
+              typeof ffLines === "string"
+                ? ffLines
+                : (ffLines as TextValue)?._text,
+            ]
+      ) // Type assertion
         .filter(Boolean)
         .join(", ");
     }
@@ -232,36 +311,52 @@ export default function TrademarkDetailPage() {
 
   const noticeData = noticeWrapper?.TradeMark;
 
-  const renderNiceClasses = (goodsServicesContainer?: any) => {
+  const renderNiceClasses = (
+    goodsServicesContainer?: TrademarkDetailData["GoodsServicesDetails"]["GoodsServices"] // More specific type
+  ) => {
     if (!goodsServicesContainer?.ClassDescriptionDetails?.ClassDescription) {
       return <p>N/A</p>;
     }
 
-    let classes =
+    let classes: ClassDescription[] =
       goodsServicesContainer.ClassDescriptionDetails.ClassDescription;
     if (!Array.isArray(classes)) classes = [classes];
 
     return (
       <ul className="list-disc list-inside space-y-2">
-        {classes.map((cd: any, index: number) => {
+        {classes.map((cd: ClassDescription, index: number) => {
+          // Use ClassDescription type
           let descriptions: string[] = [];
           if (cd.GoodsServicesDescription) {
             const descArray = Array.isArray(cd.GoodsServicesDescription)
               ? cd.GoodsServicesDescription
               : [cd.GoodsServicesDescription];
             descriptions = descArray
-              .map((descEntry: any) => {
-                // descEntry could be a string directly, or an object with _text
-                if (typeof descEntry === "string") return descEntry;
-                if (descEntry && typeof descEntry._text === "string")
-                  return descEntry._text;
-                return "";
-              })
+              .map(
+                (
+                  descEntry: string | TextValue | GoodsServicesDescriptionEntry
+                ) => {
+                  // Use specific type
+                  // descEntry could be a string directly, or an object with _text
+                  if (typeof descEntry === "string") return descEntry;
+                  if (
+                    descEntry &&
+                    typeof (descEntry as TextValue)._text === "string"
+                  )
+                    // Check _text property
+                    return (descEntry as TextValue)._text!;
+                  return "";
+                }
+              )
               .filter(Boolean);
           }
+          const classNumberValue =
+            typeof cd.ClassNumber === "string"
+              ? cd.ClassNumber
+              : cd.ClassNumber?._text;
           return (
             <li key={index}>
-              <strong>Classe {cd.ClassNumber || "N/A"}:</strong>
+              <strong>Classe {classNumberValue || "N/A"}:</strong>
               <div className="pl-2 whitespace-pre-line">
                 {descriptions.join("; ") || "No description"}
               </div>
@@ -325,13 +420,16 @@ export default function TrademarkDetailPage() {
         <CardContent className="space-y-6">
           {noticeData.MarkImageDetails?.MarkImage?.MarkImageFilename && id && (
             <div className="my-4 text-center">
-              <img
+              <Image // Use next/image
                 src={`/api/trademark-image/${id}`}
                 alt={`Logo for ${
                   noticeData.WordMarkSpecification?.MarkVerbalElementText ||
                   "trademark"
                 }`}
-                className="inline-block border max-h-40"
+                className="inline-block border"
+                width={160} // Example width, adjust as needed
+                height={40} // Example height, adjust as needed (max-h-40 was used)
+                style={{ objectFit: "contain", maxHeight: "10rem" }} // 10rem = 160px if 1rem=16px. max-h-40 = 10rem.
               />
             </div>
           )}
@@ -354,11 +452,13 @@ export default function TrademarkDetailPage() {
             <p>{formatDateDisplay(noticeData.ApplicationDate)}</p>
           </div>
           <div>
-            <h3 className="font-semibold">Date d'Enregistrement:</h3>{" "}
+            <h3 className="font-semibold">Date d&apos;Enregistrement:</h3>{" "}
+            {/* Escaped quote */}
             <p>{formatDateDisplay(noticeData.RegistrationDate)}</p>
           </div>
           <div>
-            <h3 className="font-semibold">Date d'Expiration:</h3>{" "}
+            <h3 className="font-semibold">Date d&apos;Expiration:</h3>{" "}
+            {/* Escaped quote */}
             <p>{formatDateDisplay(noticeData.ExpiryDate)}</p>
           </div>
 
@@ -367,7 +467,10 @@ export default function TrademarkDetailPage() {
             {noticeData.ApplicantDetails?.Applicant ? (
               Array.isArray(noticeData.ApplicantDetails.Applicant) ? (
                 noticeData.ApplicantDetails.Applicant.map(
-                  (app: any, i: number) => (
+                  (
+                    app: Party,
+                    i: number // Use Party type
+                  ) => (
                     <div key={`app-${i}`} className="ml-4 mb-2">
                       {renderPartyDetails(app, "Applicant")}
                     </div>
@@ -376,7 +479,7 @@ export default function TrademarkDetailPage() {
               ) : (
                 <div className="ml-4">
                   {renderPartyDetails(
-                    noticeData.ApplicantDetails.Applicant,
+                    noticeData.ApplicantDetails.Applicant as Party, // Type assertion
                     "Applicant"
                   )}
                 </div>
@@ -393,7 +496,10 @@ export default function TrademarkDetailPage() {
                 noticeData.RepresentativeDetails.Representative
               ) ? (
                 noticeData.RepresentativeDetails.Representative.map(
-                  (rep: any, i: number) => (
+                  (
+                    rep: Party,
+                    i: number // Use Party type
+                  ) => (
                     <div key={`rep-${i}`} className="ml-4 mb-2">
                       {renderPartyDetails(rep, "Representative")}
                     </div>
@@ -402,7 +508,7 @@ export default function TrademarkDetailPage() {
               ) : (
                 <div className="ml-4">
                   {renderPartyDetails(
-                    noticeData.RepresentativeDetails.Representative,
+                    noticeData.RepresentativeDetails.Representative as Party, // Type assertion
                     "Representative"
                   )}
                 </div>

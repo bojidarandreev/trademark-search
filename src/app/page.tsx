@@ -12,7 +12,28 @@ import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
 // Types for the trademark search results
-const trademarkSchema = z.object({
+
+// Define interfaces for the raw data structure from the API
+interface InpiField {
+  name: string;
+  value?: string | Record<string, unknown> | Array<Record<string, unknown>>; // value can be complex for NiceClassDetails
+  values?: string[];
+}
+
+interface RawInpiResultItem {
+  fields: InpiField[];
+  xml?: { href?: string };
+  // other potential top-level properties from rawData.results
+}
+
+interface NiceClassEntry {
+  classNumber: string;
+  // other properties if known
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _trademarkSchema = z.object({
+  // Prefixed with underscore
   marque: z.string(),
   dateDepot: z.string(),
   produitsServices: z.string(),
@@ -24,12 +45,10 @@ const trademarkSchema = z.object({
   // For now, we'll derive the ID for the detail page from noticeUrl
 });
 
-type Trademark = z.infer<typeof trademarkSchema>;
+type Trademark = z.infer<typeof _trademarkSchema>; // Use underscored name
 
 function findFieldValue(
-  fields:
-    | Array<{ name: string; value?: string; values?: string[] }>
-    | undefined,
+  fields: InpiField[] | undefined, // Use InpiField type
   fieldName: string
 ): string | undefined {
   if (!Array.isArray(fields)) {
@@ -87,128 +106,134 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
   console.log("Frontend: Raw data received from backend API:", rawData);
 
   if (rawData && Array.isArray(rawData.results)) {
-    const mappedResults: Trademark[] = rawData.results.map((item: any) => {
-      const fieldsArray = Array.isArray(item.fields) ? item.fields : [];
+    const mappedResults: Trademark[] = rawData.results.map(
+      (item: RawInpiResultItem) => {
+        // Use RawInpiResultItem type
+        const fieldsArray: InpiField[] = Array.isArray(item.fields)
+          ? item.fields
+          : []; // Ensure fieldsArray is InpiField[]
 
-      let origine = "N/A";
-      const ukey = findFieldValue(fieldsArray, "ukey");
-      if (ukey) {
-        if (ukey.startsWith("FMARK")) origine = "FR";
-        else if (ukey.startsWith("CTMARK")) origine = "EU";
-        else if (ukey.startsWith("TMINT")) origine = "WO";
-      }
-      if (origine === "N/A") {
-        const appNumForOrigin = findFieldValue(
-          fieldsArray,
-          "ApplicationNumber"
+        let origine = "N/A";
+        const ukey = findFieldValue(fieldsArray, "ukey");
+        if (ukey) {
+          if (ukey.startsWith("FMARK")) origine = "FR";
+          else if (ukey.startsWith("CTMARK")) origine = "EU";
+          else if (ukey.startsWith("TMINT")) origine = "WO";
+        }
+        if (origine === "N/A") {
+          const appNumForOrigin = findFieldValue(
+            fieldsArray,
+            "ApplicationNumber"
+          );
+          if (appNumForOrigin) {
+            if (
+              appNumForOrigin.length > 2 &&
+              /^[A-Z]{2}/.test(appNumForOrigin.substring(0, 2))
+            ) {
+              const prefix = appNumForOrigin.substring(0, 2).toUpperCase();
+              if (prefix === "FR") origine = "FR";
+              else if (prefix === "EU") origine = "EU";
+              else if (prefix === "WO") origine = "WO";
+            } else if (appNumForOrigin.startsWith("0")) {
+              origine = "EU";
+            }
+          }
+        }
+
+        let produitsServicesText = "N/A";
+        const niceClassField = fieldsArray.find(
+          (f) => f.name === "NiceClassDetails"
         );
-        if (appNumForOrigin) {
+        if (niceClassField) {
           if (
-            appNumForOrigin.length > 2 &&
-            /^[A-Z]{2}/.test(appNumForOrigin.substring(0, 2))
+            typeof niceClassField.value === "object" &&
+            niceClassField.value !== null
           ) {
-            const prefix = appNumForOrigin.substring(0, 2).toUpperCase();
-            if (prefix === "FR") origine = "FR";
-            else if (prefix === "EU") origine = "EU";
-            else if (prefix === "WO") origine = "WO";
-          } else if (appNumForOrigin.startsWith("0")) {
-            origine = "EU";
-          }
-        }
-      }
+            try {
+              const niceClassesInput = niceClassField.value;
+              if (Array.isArray(niceClassesInput)) {
+                // niceClassesInput is Array<Record<string, any>>
+                const classNumbers = niceClassesInput
+                  .map((nc: NiceClassEntry) => nc.classNumber) // Use NiceClassEntry
+                  .filter(
+                    (cn: string) => cn !== null && cn !== undefined && cn !== "" // cn is string
+                  )
+                  .sort((a: string, b: string) => {
+                    const numA = parseInt(a, 10);
+                    const numB = parseInt(b, 10);
+                    if (isNaN(numA) && isNaN(numB)) return 0;
+                    if (isNaN(numA)) return 1; // Put non-numeric last
+                    if (isNaN(numB)) return -1; // Put non-numeric last
+                    return numA - numB;
+                  });
 
-      let produitsServicesText = "N/A";
-      const niceClassField = fieldsArray.find(
-        (f) => f.name === "NiceClassDetails"
-      );
-      if (niceClassField) {
-        if (
-          typeof niceClassField.value === "object" &&
-          niceClassField.value !== null
-        ) {
-          try {
-            const niceClassesInput = niceClassField.value;
-            if (Array.isArray(niceClassesInput)) {
-              const classNumbers = niceClassesInput
-                .map((nc: any) => nc.classNumber)
-                .filter(
-                  (cn: any) => cn !== null && cn !== undefined && cn !== ""
-                )
-                .sort((a: string, b: string) => {
-                  const numA = parseInt(a, 10);
-                  const numB = parseInt(b, 10);
-                  if (isNaN(numA) && isNaN(numB)) return 0;
-                  if (isNaN(numA)) return 1; // Put non-numeric last
-                  if (isNaN(numB)) return -1; // Put non-numeric last
-                  return numA - numB;
-                });
-
-              if (classNumbers.length > 0) {
-                produitsServicesText = `Classes: ${classNumbers.join(", ")}`;
-              } else {
-                // produitsServicesText remains 'N/A' (default) or we can set 'Classes: N/A'
-                // Keeping 'N/A' if no numbers found for cleaner fallback.
-              }
-            } else if (
-              typeof niceClassesInput === "object" &&
-              niceClassesInput.classNumber
-            ) {
-              if (niceClassesInput.classNumber) {
-                produitsServicesText = `Classes: ${niceClassesInput.classNumber}`;
+                if (classNumbers.length > 0) {
+                  produitsServicesText = `Classes: ${classNumbers.join(", ")}`;
+                } else {
+                  // produitsServicesText remains 'N/A' (default) or we can set 'Classes: N/A'
+                  // Keeping 'N/A' if no numbers found for cleaner fallback.
+                }
+              } else if (
+                typeof niceClassesInput === "object" &&
+                niceClassesInput.classNumber
+              ) {
+                if (niceClassesInput.classNumber) {
+                  produitsServicesText = `Classes: ${niceClassesInput.classNumber}`;
+                } // else produitsServicesText remains 'N/A'
+              } else if (
+                typeof niceClassesInput === "string" &&
+                niceClassesInput.trim() !== ""
+              ) {
+                // If it's a pre-formatted string, use it directly.
+                // This might happen if the API sometimes returns it differently.
+                produitsServicesText = niceClassesInput;
+              } else if (niceClassesInput) {
+                // Catch other non-null, non-array, non-object-with-classNumber cases
+                produitsServicesText = JSON.stringify(niceClassesInput);
               } // else produitsServicesText remains 'N/A'
-            } else if (
-              typeof niceClassesInput === "string" &&
-              niceClassesInput.trim() !== ""
-            ) {
-              // If it's a pre-formatted string, use it directly.
-              // This might happen if the API sometimes returns it differently.
-              produitsServicesText = niceClassesInput;
-            } else if (niceClassesInput) {
-              // Catch other non-null, non-array, non-object-with-classNumber cases
-              produitsServicesText = JSON.stringify(niceClassesInput);
-            } // else produitsServicesText remains 'N/A'
-          } catch (e) {
-            console.error("Error parsing Nice classes in search results:", e);
-            produitsServicesText = "Error parsing classes"; // More specific error
+            } catch (e) {
+              console.error("Error parsing Nice classes in search results:", e);
+              produitsServicesText = "Error parsing classes"; // More specific error
+            }
+          } else if (niceClassField.value) {
+            produitsServicesText = niceClassField.value;
+          } else if (
+            Array.isArray(niceClassField.values) &&
+            niceClassField.values.length > 0
+          ) {
+            produitsServicesText = niceClassField.values.join(", ");
           }
-        } else if (niceClassField.value) {
-          produitsServicesText = niceClassField.value;
-        } else if (
-          Array.isArray(niceClassField.values) &&
-          niceClassField.values.length > 0
-        ) {
-          produitsServicesText = niceClassField.values.join(", ");
         }
-      }
 
-      let rawDateToFormat = findFieldValue(fieldsArray, "RegistrationDate");
-      if (!rawDateToFormat) {
-        // findFieldValue for PublicationDate needs to be adjusted to return first value if it's an array
-        const pubDateField = fieldsArray.find(
-          (f) => f.name === "PublicationDate"
-        );
-        if (
-          pubDateField &&
-          Array.isArray(pubDateField.values) &&
-          pubDateField.values.length > 0
-        ) {
-          rawDateToFormat = pubDateField.values[0];
-        } else if (pubDateField && pubDateField.value) {
-          rawDateToFormat = pubDateField.value;
+        let rawDateToFormat = findFieldValue(fieldsArray, "RegistrationDate");
+        if (!rawDateToFormat) {
+          // findFieldValue for PublicationDate needs to be adjusted to return first value if it's an array
+          const pubDateField = fieldsArray.find(
+            (f) => f.name === "PublicationDate"
+          );
+          if (
+            pubDateField &&
+            Array.isArray(pubDateField.values) &&
+            pubDateField.values.length > 0
+          ) {
+            rawDateToFormat = pubDateField.values[0];
+          } else if (pubDateField && pubDateField.value) {
+            rawDateToFormat = pubDateField.value;
+          }
         }
-      }
 
-      return {
-        marque: findFieldValue(fieldsArray, "Mark") || "N/A",
-        dateDepot: formatDateDisplay(rawDateToFormat),
-        produitsServices: produitsServicesText,
-        origine: origine,
-        statut: findFieldValue(fieldsArray, "MarkCurrentStatusCode") || "N/A",
-        noticeUrl: item.xml?.href, // This contains the full ID like EU13333497
-        applicationNumber:
-          findFieldValue(fieldsArray, "ApplicationNumber") || undefined,
-      };
-    });
+        return {
+          marque: findFieldValue(fieldsArray, "Mark") || "N/A",
+          dateDepot: formatDateDisplay(rawDateToFormat),
+          produitsServices: produitsServicesText,
+          origine: origine,
+          statut: findFieldValue(fieldsArray, "MarkCurrentStatusCode") || "N/A",
+          noticeUrl: item.xml?.href, // This contains the full ID like EU13333497
+          applicationNumber:
+            findFieldValue(fieldsArray, "ApplicationNumber") || undefined,
+        };
+      }
+    );
     console.log("Frontend: Mapped results:", mappedResults);
     return mappedResults;
   } else {
@@ -366,8 +391,8 @@ export default function TrademarkSearch() {
           </div>
         ) : submittedQuery && !isLoading && !isFetching ? (
           <div className="text-center p-4 text-gray-500">
-            No results found for "{submittedQuery}". Try a different search
-            term.
+            No results found for &quot;{submittedQuery}&quot;. Try a different
+            search term.
           </div>
         ) : (
           <div className="text-center p-4 text-gray-400">
