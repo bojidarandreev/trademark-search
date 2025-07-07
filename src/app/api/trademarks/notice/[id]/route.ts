@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server"; // Import NextRequest
 import {
   client,
   getAccessToken,
@@ -15,12 +15,12 @@ import axios from "axios"; // For AxiosError type checking
 const INPI_API_BASE_URL = "https://api-gateway.inpi.fr";
 
 export async function GET(
-  request: Request,
-  context: { params: Promise<{ id: string }> } // params is now a Promise
+  request: NextRequest, // Changed Request to NextRequest
+  context: { params: Promise<{ id: string }> }
 ) {
   // To address the "params should be awaited" warning, ensure context.params is accessed correctly.
   // For Route Handlers, context.params is directly available.
-  const { id } = await context.params; // Await params here
+  const { id } = await context.params;
 
   if (!id) {
     return NextResponse.json(

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server"; // Added NextRequest back
 import {
   client,
   getAccessToken,
@@ -12,10 +12,10 @@ const INPI_IMAGE_BASE_URL =
   "https://api-gateway.inpi.fr/services/apidiffusion/api/marques/image";
 
 export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
+  request: NextRequest, // Changed Request to NextRequest
+  context: { params: Promise<{ id: string }> }
 ) {
-  const { id } = params;
+  const { id } = await context.params;
 
   if (!id) {
     return NextResponse.json(
