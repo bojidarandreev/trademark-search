@@ -121,34 +121,14 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
       const niceClassField = fieldsArray.find(
         (f) => f.name === "NiceClassDetails"
       );
-      console.log(
-        "Frontend Search: Found niceClassField:",
-        JSON.stringify(niceClassField, null, 2)
-      ); // Log the whole field
-
       if (niceClassField) {
-        console.log(
-          "Frontend Search: niceClassField.value type:",
-          typeof niceClassField.value
-        );
-        console.log(
-          "Frontend Search: niceClassField.value content:",
-          JSON.stringify(niceClassField.value, null, 2)
-        ); // Log the value
-
         if (
           typeof niceClassField.value === "object" &&
           niceClassField.value !== null
         ) {
           try {
             const niceClassesInput = niceClassField.value;
-            console.log(
-              "Frontend Search: Processing niceClassesInput (object):",
-              JSON.stringify(niceClassesInput, null, 2)
-            );
-
             if (Array.isArray(niceClassesInput)) {
-              console.log("Frontend Search: niceClassesInput is an array.");
               const classNumbers = niceClassesInput
                 .map((nc: any) => nc.classNumber)
                 .filter(

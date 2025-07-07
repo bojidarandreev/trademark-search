@@ -25,15 +25,13 @@ async function performSearchV2(
   searchPayload: any
 ): Promise<any> {
   console.log(
-    "<<<<<< performSearchV2 - Re-implementation (Backend Filtering Strategy) >>>>>>"
+    "<<<<<< performSearchV2 - Re-implementation (Backend Filtering Strategy V11) >>>>>>"
   );
 
   let currentGlobalXsrfToken = getXsrfTokenValue();
-  console.log(
-    `PERFORM_SEARCH_V2: Initial global XSRF token before metadata GET: '${
-      currentGlobalXsrfToken || "None"
-    }'`
-  );
+  // console.log( // Too verbose for regular operation
+  //   `PERFORM_SEARCH_V2: Initial global XSRF token before metadata GET: '${currentGlobalXsrfToken || "None"}'`
+  // );
 
   let xsrfTokenForPostRequest = currentGlobalXsrfToken;
 
@@ -45,9 +43,9 @@ async function performSearchV2(
         "X-XSRF-TOKEN": currentGlobalXsrfToken || "",
       },
     });
-    console.log(
-      `PERFORM_SEARCH_V2: Preliminary GET to ${ACTUAL_MARQUES_METADATA_ENDPOINT} completed. Status: ${metadataResponse.status}`
-    );
+    // console.log( // Too verbose
+    //   `PERFORM_SEARCH_V2: Preliminary GET to ${ACTUAL_MARQUES_METADATA_ENDPOINT} completed. Status: ${metadataResponse.status}`
+    // );
 
     const metadataSetCookieHeader = metadataResponse.headers["set-cookie"];
     let identifiedNewXsrfTokenFromHeader;
@@ -66,13 +64,9 @@ async function performSearchV2(
       xsrfTokenForPostRequest = decodeURIComponent(
         identifiedNewXsrfTokenFromHeader
       );
-      console.log(
-        "PERFORM_SEARCH_V2: Using XSRF-TOKEN directly from metadata Set-Cookie header:",
-        xsrfTokenForPostRequest
-      );
+      // console.log("PERFORM_SEARCH_V2: Using XSRF-TOKEN directly from metadata Set-Cookie header:", xsrfTokenForPostRequest); // Too verbose
       updateXsrfTokenValue(xsrfTokenForPostRequest);
       if (clientV2.defaults.jar) {
-        // Ensure jar exists
         await clientV2.defaults.jar.setCookie(
           `XSRF-TOKEN=${xsrfTokenForPostRequest}; Path=/`,
           ACTUAL_MARQUES_SEARCH_ENDPOINT
@@ -80,7 +74,6 @@ async function performSearchV2(
       }
     } else {
       if (clientV2.defaults.jar) {
-        // Ensure jar exists
         const cookiesInJarAfterMetadataGet =
           await clientV2.defaults.jar.getCookies(
             ACTUAL_MARQUES_METADATA_ENDPOINT
@@ -96,7 +89,7 @@ async function performSearchV2(
           if (tokenFromJar !== xsrfTokenForPostRequest) {
             xsrfTokenForPostRequest = tokenFromJar;
             updateXsrfTokenValue(xsrfTokenForPostRequest);
-            console.log("PERFORM_SEARCH_V2: Updated XSRF token from JAR.");
+            // console.log("PERFORM_SEARCH_V2: Updated XSRF token from JAR."); // Too verbose
           }
         } else {
           console.warn(
@@ -111,7 +104,7 @@ async function performSearchV2(
         );
       }
       if (xsrfTokenForPostRequest)
-        updateXsrfTokenValue(xsrfTokenForPostRequest); // Ensure global is set if we had one
+        updateXsrfTokenValue(xsrfTokenForPostRequest);
     }
   } catch (metaError) {
     logError("performSearchV2_preliminaryGetToMetadata", metaError);
@@ -123,19 +116,11 @@ async function performSearchV2(
     if (xsrfTokenForPostRequest) updateXsrfTokenValue(xsrfTokenForPostRequest);
   }
 
-  console.log(
-    `PERFORM_SEARCH_V2: X-XSRF-TOKEN to be used in POST header: '${
-      xsrfTokenForPostRequest || "None"
-    }'`
-  );
-  console.log(
-    "PERFORM_SEARCH_V2: Search Payload for INPI:",
-    JSON.stringify(searchPayload, null, 2)
-  );
+  // console.log(`PERFORM_SEARCH_V2: X-XSRF-TOKEN to be used in POST header: '${ xsrfTokenForPostRequest || "None"}'`); // Too verbose
+  // console.log("PERFORM_SEARCH_V2: Search Payload for INPI:", JSON.stringify(searchPayload, null, 2)); // Too verbose
 
   let searchPostCookieHeader = "";
   if (clientV2.defaults.jar) {
-    // Ensure jar exists
     try {
       const allCookiesForSearchUrl = await clientV2.defaults.jar.getCookies(
         ACTUAL_MARQUES_SEARCH_ENDPOINT
@@ -168,13 +153,12 @@ async function performSearchV2(
     "Content-Type": "application/json",
     Accept: "application/json",
     "User-Agent":
-      "Next.js Trademark Search App/1.0 (Backend Filtering Strategy - V10)",
+      "Next.js Trademark Search App/1.0 (Backend Filtering Strategy - V11)", // Keep V11 for now or update if we make more backend changes
   };
   if (xsrfTokenForPostRequest)
     requestHeaders["X-XSRF-TOKEN"] = xsrfTokenForPostRequest;
   if (searchPostCookieHeader) requestHeaders["Cookie"] = searchPostCookieHeader;
   else if (xsrfTokenForPostRequest && !searchPostCookieHeader) {
-    // If jar failed but we have an XSRF token, ensure it's in the Cookie header as INPI might need it there too
     requestHeaders["Cookie"] = `XSRF-TOKEN=${xsrfTokenForPostRequest}`;
   }
 
@@ -185,7 +169,7 @@ async function performSearchV2(
 
 export async function GET(request: Request) {
   console.log(
-    "<<<<<< GET HANDLER - Re-implementation (Backend Filtering Strategy V10) >>>>>>"
+    "<<<<<< GET HANDLER - Backend Filtering Strategy (Confirmed V11 equivalent) >>>>>>"
   );
   try {
     const { searchParams } = new URL(request.url);
@@ -195,8 +179,18 @@ export async function GET(request: Request) {
       searchParams.get("nbResultsPerPage") || "20";
     let sortFieldFromUrl = searchParams.get("sort") || "relevance";
     let orderFromUrl = searchParams.get("order") || "asc";
+
     const niceClassesParam = searchParams.get("niceClasses");
     const originParam = searchParams.get("origin");
+    const niceLogicFromUrl = searchParams.get("niceLogic");
+
+    // Correctly parse niceLogicParam: default to 'AND'
+    const niceLogicParam: "AND" | "OR" =
+      niceLogicFromUrl?.toUpperCase() === "OR" ? "OR" : "AND";
+
+    console.log(
+      `GET HANDLER: Received niceLogicFromUrl: '${niceLogicFromUrl}', Parsed niceLogicParam: '${niceLogicParam}'`
+    );
 
     if (!queryFromUser) {
       return NextResponse.json(
@@ -207,7 +201,7 @@ export async function GET(request: Request) {
 
     let processedQuery = queryFromUser.trim();
     if (processedQuery.includes(" ")) {
-      processedQuery = `"${processedQuery.replace(/"/g, '\\"')}"`;
+      processedQuery = `"${processedQuery.replace(/"/g, '"')}"`;
     }
 
     const solrQueryForINPI = `[Mark=${processedQuery}]`;
@@ -218,17 +212,18 @@ export async function GET(request: Request) {
         .split(",")
         .map((nc) => parseInt(nc.trim(), 10))
         .filter((nc) => !isNaN(nc) && nc > 0 && nc <= 45);
-      if (niceClassesForBackendFilter.length > 0) {
-        console.log(
-          "GET HANDLER: Nice Classes for backend filtering:",
-          niceClassesForBackendFilter.join(", ")
-        );
-      }
+    }
+
+    if (niceClassesForBackendFilter.length > 0) {
+      console.log(
+        "GET HANDLER: Nice Classes for backend filtering:",
+        niceClassesForBackendFilter.join(", ")
+      );
+      console.log("GET HANDLER: Applying Nice Class logic:", niceLogicParam); // Log the logic being applied
     }
     if (originParam) {
       console.log("GET HANDLER: Origin for backend filtering:", originParam);
     }
-
     console.log("GET HANDLER: Solr Query to INPI:", solrQueryForINPI);
 
     let token = await getAccessToken();
@@ -248,7 +243,7 @@ export async function GET(request: Request) {
     const searchPayload: any = {
       query: solrQueryForINPI,
       position: (parsedPage - 1) * parsedNbResultsPerPage,
-      size: parsedNbResultsPerPage,
+      size: parsedNbResultsPerPage, // Fetch more for backend filtering if needed, or implement pagination on filtered results later
       collections: ["FR", "EU", "WO"],
       fields: [
         "ApplicationNumber",
@@ -271,14 +266,11 @@ export async function GET(request: Request) {
       sortList: [`${finalSortField} ${finalSortOrder}`],
     };
 
-    console.log(
-      "GET HANDLER: Payload for INPI:",
-      JSON.stringify(searchPayload, null, 2).substring(0, 500) + "..."
-    );
+    // console.log("GET HANDLER: Payload for INPI:", JSON.stringify(searchPayload, null, 2).substring(0, 500) + "..."); // Too verbose
 
     try {
       const response = await performSearchV2(token, searchPayload);
-      console.log("GET HANDLER: INPI response status:", response.status);
+      // console.log("GET HANDLER: INPI response status:", response.status); // Too verbose
 
       let responseData = response.data;
 
@@ -290,7 +282,7 @@ export async function GET(request: Request) {
 
         if (hasNiceClassFilter || hasOriginFilter) {
           responseData.results = responseData.results.filter((item: any) => {
-            let matchesNiceClass = !hasNiceClassFilter;
+            let matchesNiceClass = !hasNiceClassFilter; // Default to true if no Nice Class filter
             if (hasNiceClassFilter) {
               const classNumberField = Array.isArray(item.fields)
                 ? item.fields.find((f: any) => f.name === "ClassNumber")
@@ -304,15 +296,23 @@ export async function GET(request: Request) {
                 const itemClassNumbers = itemClassesRaw
                   .map((cn) => parseInt(cn, 10))
                   .filter((cn) => !isNaN(cn));
-                matchesNiceClass = niceClassesForBackendFilter.every(
-                  (selectedCn) => itemClassNumbers.includes(selectedCn)
-                );
+
+                if (niceLogicParam === "OR") {
+                  matchesNiceClass = niceClassesForBackendFilter.some(
+                    (selectedCn) => itemClassNumbers.includes(selectedCn)
+                  );
+                } else {
+                  // Default to AND
+                  matchesNiceClass = niceClassesForBackendFilter.every(
+                    (selectedCn) => itemClassNumbers.includes(selectedCn)
+                  );
+                }
               } else {
-                matchesNiceClass = false;
+                matchesNiceClass = false; // Item has no class numbers, so cannot match if filter is active
               }
             }
 
-            let matchesOrigin = !hasOriginFilter;
+            let matchesOrigin = !hasOriginFilter; // Default to true if no Origin filter
             if (hasOriginFilter) {
               let derivedOrigin = "N/A";
               const ukeyField = Array.isArray(item.fields)
@@ -326,6 +326,7 @@ export async function GET(request: Request) {
                   derivedOrigin = "WO";
               }
               if (derivedOrigin === "N/A") {
+                // Fallback if ukey is not definitive
                 const appNumField = Array.isArray(item.fields)
                   ? item.fields.find((f: any) => f.name === "ApplicationNumber")
                   : null;
@@ -345,32 +346,32 @@ export async function GET(request: Request) {
                     appNum.length >= 8 &&
                     appNum.length <= 9
                   ) {
+                    // EUIPO numbers can start with 0
                     derivedOrigin = "EU";
                   }
                 }
               }
-              matchesOrigin = derivedOrigin === originParam; // originParam is already uppercase or null from frontend
+              matchesOrigin = derivedOrigin === originParam;
             }
             return matchesNiceClass && matchesOrigin;
           });
           console.log(
-            `GET HANDLER: Filtered ${initialCount} results down to ${
+            `GET HANDLER: Filtered ${initialCount} INPI results down to ${
               responseData.results.length
-            }. Nice: ${niceClassesForBackendFilter.join(",")}, Origin: ${
-              originParam || "All"
-            }`
+            }. Filters: Nice=[${niceClassesForBackendFilter.join(
+              ","
+            )}] (Logic: ${niceLogicParam}), Origin=[${originParam || "All"}]`
           );
         }
       } else {
-        // Ensure results is an array even if INPI returns something else or no results key
+        // Ensure results is always an array, even if API returns something else or it's missing
         responseData = { ...responseData, results: [] };
       }
 
       return NextResponse.json(responseData);
     } catch (error: unknown) {
-      logError("GET_handler_searchRequest_catch", error); // Centralized logging
-      // Re-throw as APIError or allow default Next.js error handling
-      if (error instanceof APIError) throw error; // Re-throw if already an APIError
+      logError("GET_handler_searchRequest_catch", error);
+      if (error instanceof APIError) throw error;
       if (axios.isAxiosError(error)) {
         throw new APIError(
           `INPI Search Failed: ${
@@ -389,7 +390,7 @@ export async function GET(request: Request) {
       );
     }
   } catch (error: unknown) {
-    logError("GET_handler_main_catch", error); // Log error from the main try block
+    logError("GET_handler_main_catch", error);
     if (error instanceof APIError) {
       return NextResponse.json(
         {

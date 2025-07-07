@@ -112,7 +112,8 @@ function formatDateDisplay(yyyymmddStr?: string): string {
 async function searchTrademarksV2(
   query: string,
   niceClasses: number[] = [],
-  origin: string | null = null
+  origin: string | null = null,
+  niceLogic: "AND" | "OR" = "AND"
 ): Promise<Trademark[]> {
   if (!query.trim()) {
     console.log("Frontend V2 Test Page: Empty query, not fetching.");
@@ -120,11 +121,26 @@ async function searchTrademarksV2(
   }
   const params = new URLSearchParams();
   params.append("q", query);
-  if (niceClasses.length > 0)
+
+  if (niceClasses.length > 0) {
     params.append("niceClasses", niceClasses.join(","));
-  if (origin) params.append("origin", origin);
-  const apiUrl = `/api/trademarks/searchV2?${params.toString()}`;
-  console.log(`Frontend V2 Test Page: Fetching ${apiUrl}`);
+    // Always send niceLogic if classes are present
+    params.append("niceLogic", niceLogic);
+  }
+  if (origin) {
+    params.append("origin", origin);
+  }
+
+  // ***** JULES DEBUG MARK 1 *****
+  console.log(
+    `[JULES_DEBUG_MARK_1] searchTrademarksV2 called with: query='${query}', niceClasses=[${niceClasses.join(
+      ","
+    )}] niceLogic='${niceLogic}', origin='${origin}'`
+  );
+  const finalParamsString = params.toString();
+  const apiUrl = `/api/trademarks/searchV2?${finalParamsString}`;
+  // ***** JULES DEBUG MARK 2 *****
+  console.log(`[JULES_DEBUG_MARK_2] Fetching final apiUrl: ${apiUrl}`);
   const response = await fetch(apiUrl);
   const rawData = await response.json();
   if (!response.ok) {
@@ -138,10 +154,7 @@ async function searchTrademarksV2(
         "Failed to fetch trademarks from backend V2 API"
     );
   }
-  console.log(
-    "Frontend V2 Test Page: Raw data received from backend API:",
-    JSON.stringify(rawData, null, 2)
-  );
+  // console.log("Frontend V2 Test Page: Raw data received from backend API:", JSON.stringify(rawData, null, 2)); // Optional: too verbose for now
   if (rawData && Array.isArray(rawData.results)) {
     return rawData.results.map((item: any) => {
       const fieldsArray = Array.isArray(item.fields) ? item.fields : [];
@@ -234,7 +247,6 @@ export default function TrademarkSearchV2TestPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // State initialized from URL or defaults
   const [searchQuery, setSearchQuery] = useState(
     () => searchParams.get("q") || ""
   );
@@ -258,12 +270,21 @@ export default function TrademarkSearchV2TestPage() {
       ? originParam.toUpperCase()
       : null;
   });
+  const [niceClassLogic, setNiceClassLogic] = useState<"AND" | "OR">(() => {
+    const logicParam = searchParams.get("niceLogic");
+    return logicParam === "OR" || logicParam === "AND" ? logicParam : "AND";
+  });
 
-  // Effect to synchronize URL parameters to component state when searchParams change (e.g., browser back/forward)
   useEffect(() => {
     const qParam = searchParams.get("q") || "";
     const niceClassesParam = searchParams.get("niceClasses");
     const originParam = searchParams.get("origin");
+    const niceLogicParam = searchParams.get("niceLogic");
+
+    // ***** JULES DEBUG MARK 3 *****
+    console.log(
+      `[JULES_DEBUG_MARK_3] useEffect (searchParams change): q='${qParam}', niceClasses='${niceClassesParam}', origin='${originParam}', niceLogic='${niceLogicParam}'`
+    );
 
     setSearchQuery(qParam);
     setSubmittedQuery(qParam);
@@ -280,51 +301,68 @@ export default function TrademarkSearchV2TestPage() {
         ? originParam.toUpperCase()
         : null
     );
-
-    console.log(
-      "State restored from URL: q=",
-      qParam,
-      "niceClasses=",
-      niceClassesParam,
-      "origin=",
-      originParam
+    setNiceClassLogic(
+      niceLogicParam === "OR" || niceLogicParam === "AND"
+        ? niceLogicParam
+        : "AND"
     );
-  }, [searchParams]);
+  }, [searchParams]); // Only depends on searchParams
 
-  // Helper function to update URL
   const updateUrl = useCallback(
     (newStates: {
       q?: string;
       niceClasses?: number[];
       origin?: string | null;
+      niceLogic?: "AND" | "OR";
     }) => {
-      const currentParams = new URLSearchParams(searchParams.toString());
+      const currentParamsFromHook = new URLSearchParams(
+        searchParams.toString()
+      );
 
-      if (newStates.q !== undefined) {
-        if (newStates.q) currentParams.set("q", newStates.q);
-        else currentParams.delete("q");
+      const finalQ =
+        newStates.q !== undefined
+          ? newStates.q
+          : currentParamsFromHook.get("q");
+      const finalNC =
+        newStates.niceClasses !== undefined
+          ? newStates.niceClasses
+          : currentParamsFromHook
+              .get("niceClasses")
+              ?.split(",")
+              .map(Number)
+              .filter((n) => !isNaN(n) && n > 0) || [];
+      const finalOrigin =
+        newStates.origin !== undefined
+          ? newStates.origin
+          : (currentParamsFromHook.get("origin") as string | null);
+      const finalNiceLogic =
+        newStates.niceLogic !== undefined
+          ? newStates.niceLogic
+          : (currentParamsFromHook.get("niceLogic") as "AND" | "OR") || "AND";
+
+      const paramsToSet = new URLSearchParams();
+      if (finalQ) paramsToSet.set("q", finalQ);
+      if (finalNC.length > 0) {
+        paramsToSet.set("niceClasses", finalNC.join(","));
+        paramsToSet.set("niceLogic", finalNiceLogic);
+      } else {
+        paramsToSet.delete("niceLogic");
       }
-      if (newStates.niceClasses !== undefined) {
-        if (newStates.niceClasses.length > 0)
-          currentParams.set("niceClasses", newStates.niceClasses.join(","));
-        else currentParams.delete("niceClasses");
-      }
-      if (newStates.origin !== undefined) {
-        // Check for undefined to allow setting null
-        if (newStates.origin) currentParams.set("origin", newStates.origin);
-        else currentParams.delete("origin");
-      }
+      if (finalOrigin) paramsToSet.set("origin", finalOrigin);
 
       const newPath = `/v2test${
-        currentParams.toString() ? `?${currentParams.toString()}` : ""
+        paramsToSet.toString() ? `?${paramsToSet.toString()}` : ""
       }`;
-      // Only push if the path is actually different to prevent loops
-      if (window.location.pathname + window.location.search !== newPath) {
+
+      if (
+        typeof window !== "undefined" &&
+        window.location.pathname + window.location.search !== newPath
+      ) {
         router.push(newPath, { scroll: false });
       }
     },
     [router, searchParams]
-  ); // Include searchParams to ensure currentParams is fresh
+  );
 
   const {
     data: trademarks,
@@ -338,9 +376,22 @@ export default function TrademarkSearchV2TestPage() {
       submittedQuery,
       selectedNiceClasses.join(","),
       selectedOrigin,
+      niceClassLogic,
     ],
-    queryFn: () =>
-      searchTrademarksV2(submittedQuery, selectedNiceClasses, selectedOrigin),
+    queryFn: () => {
+      // ***** JULES DEBUG MARK 4 *****
+      console.log(
+        `[JULES_DEBUG_MARK_4] useQuery queryFn using: submittedQuery='${submittedQuery}', sNC=[${selectedNiceClasses.join(
+          ","
+        )}] niceLogic='${niceClassLogic}', sOrigin='${selectedOrigin}'`
+      );
+      return searchTrademarksV2(
+        submittedQuery,
+        selectedNiceClasses,
+        selectedOrigin,
+        niceClassLogic
+      );
+    },
     enabled: !!submittedQuery,
     retry: 1,
   });
@@ -349,18 +400,41 @@ export default function TrademarkSearchV2TestPage() {
     const newSelectedClasses = selectedNiceClasses.includes(classId)
       ? selectedNiceClasses.filter((id) => id !== classId)
       : [...selectedNiceClasses, classId];
-    updateUrl({ niceClasses: newSelectedClasses });
+    updateUrl({
+      niceClasses: newSelectedClasses,
+      q: submittedQuery,
+      origin: selectedOrigin,
+      niceLogic: niceClassLogic,
+    });
   };
 
   const handleOriginChange = (value: string) => {
     const newOrigin = value === "ALL" ? null : value;
-    updateUrl({ origin: newOrigin });
+    updateUrl({
+      origin: newOrigin,
+      q: submittedQuery,
+      niceClasses: selectedNiceClasses,
+      niceLogic: niceClassLogic,
+    });
+  };
+
+  const handleNiceClassLogicChange = (value: "AND" | "OR") => {
+    updateUrl({
+      niceLogic: value,
+      q: submittedQuery,
+      niceClasses: selectedNiceClasses,
+      origin: selectedOrigin,
+    });
   };
 
   const handleSearch = () => {
     const trimmedQuery = searchQuery.trim();
-    // Update URL, which will then trigger the useEffect[searchParams] to update submittedQuery and other states
-    updateUrl({ q: trimmedQuery });
+    updateUrl({
+      q: trimmedQuery,
+      niceClasses: selectedNiceClasses,
+      origin: selectedOrigin,
+      niceLogic: niceClassLogic,
+    });
   };
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -419,13 +493,35 @@ export default function TrademarkSearchV2TestPage() {
           Selected Classes:{" "}
           {selectedNiceClasses.sort((a, b) => a - b).join(", ") || "None"}
         </p>
+        <div className="mt-2">
+          <RadioGroup
+            value={niceClassLogic}
+            onValueChange={(value) =>
+              handleNiceClassLogicChange(value as "AND" | "OR")
+            }
+            className="flex space-x-4"
+          >
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="AND" id="nice-logic-and" />
+              <Label htmlFor="nice-logic-and">
+                Match ALL selected classes (AND)
+              </Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="OR" id="nice-logic-or" />
+              <Label htmlFor="nice-logic-or">
+                Match ANY selected class (OR)
+              </Label>
+            </div>
+          </RadioGroup>
+        </div>
       </div>
 
       <div className="mb-6">
         <h2 className="text-xl font-semibold mb-3">Filter by Origin</h2>
         <RadioGroup
           value={selectedOrigin || "ALL"}
-          onValueChange={handleOriginChange} // Use the new handler
+          onValueChange={handleOriginChange}
           className="flex space-x-4"
         >
           {["ALL", "FR", "EU", "WO"].map((originValue) => (
@@ -449,11 +545,7 @@ export default function TrademarkSearchV2TestPage() {
           onKeyDown={handleKeyDown}
           className="flex-1"
         />
-        <Button
-          onClick={handleSearch}
-          // Disable search if searchQuery is empty, to prevent pushing an empty q to URL then clearing results
-          disabled={isLoading || isFetching}
-        >
+        <Button onClick={handleSearch} disabled={isLoading || isFetching}>
           <Search className="w-4 h-4 mr-2" />
           {isLoading || isFetching ? "Searching (V2)..." : "Search (V2)"}
         </Button>
