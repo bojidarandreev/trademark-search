@@ -16,11 +16,11 @@ const INPI_API_BASE_URL = "https://api-gateway.inpi.fr";
 
 export async function GET(
   request: Request,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> } // params is now a Promise
 ) {
   // To address the "params should be awaited" warning, ensure context.params is accessed correctly.
   // For Route Handlers, context.params is directly available.
-  const id = params.id;
+  const { id } = await context.params; // Await params here
 
   if (!id) {
     return NextResponse.json(

@@ -26,10 +26,7 @@ interface RawInpiResultItem {
   // other potential top-level properties from rawData.results
 }
 
-interface NiceClassEntry {
-  classNumber: string;
-  // other properties if known
-}
+// NiceClassEntry interface removed as it is no longer used directly
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const _trademarkSchema = z.object({
@@ -61,7 +58,12 @@ function findFieldValue(
       if (fieldName === "PublicationDate") return field.values[0];
       return field.values.join(", ");
     }
-    return field.value;
+    if (typeof field.value === "string") {
+      return field.value;
+    }
+    // If field.value is not a string (e.g., for complex fields like NiceClassDetails),
+    // this helper should return undefined as it's for simple string extraction.
+    return undefined;
   }
   return undefined;
 }
@@ -145,59 +147,60 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
           (f) => f.name === "NiceClassDetails"
         );
         if (niceClassField) {
-          if (
-            typeof niceClassField.value === "object" &&
-            niceClassField.value !== null
-          ) {
-            try {
-              const niceClassesInput = niceClassField.value;
-              if (Array.isArray(niceClassesInput)) {
-                // niceClassesInput is Array<Record<string, any>>
-                const classNumbers = niceClassesInput
-                  .map((nc: NiceClassEntry) => nc.classNumber) // Use NiceClassEntry
-                  .filter(
-                    (cn: string) => cn !== null && cn !== undefined && cn !== "" // cn is string
-                  )
-                  .sort((a: string, b: string) => {
-                    const numA = parseInt(a, 10);
-                    const numB = parseInt(b, 10);
-                    if (isNaN(numA) && isNaN(numB)) return 0;
-                    if (isNaN(numA)) return 1; // Put non-numeric last
-                    if (isNaN(numB)) return -1; // Put non-numeric last
-                    return numA - numB;
-                  });
+          const fieldValue = niceClassField.value; // Type: string | Record<string, unknown> | Array<Record<string, unknown>> | undefined
 
-                if (classNumbers.length > 0) {
-                  produitsServicesText = `Classes: ${classNumbers.join(", ")}`;
-                } else {
-                  // produitsServicesText remains 'N/A' (default) or we can set 'Classes: N/A'
-                  // Keeping 'N/A' if no numbers found for cleaner fallback.
-                }
-              } else if (
-                typeof niceClassesInput === "object" &&
-                niceClassesInput.classNumber
+          try {
+            if (typeof fieldValue === "string" && fieldValue.trim() !== "") {
+              produitsServicesText = fieldValue;
+            } else if (Array.isArray(fieldValue)) {
+              // Process array (fieldValue is Array<Record<string, unknown>>)
+              const classNumbers = fieldValue
+                .map((nc: Record<string, unknown>) => {
+                  if (nc && typeof nc.classNumber === "string") {
+                    return nc.classNumber;
+                  }
+                  return null;
+                })
+                .filter(
+                  (cn): cn is string => typeof cn === "string" && cn !== ""
+                )
+                .sort((a: string, b: string) => {
+                  const numA = parseInt(a, 10);
+                  const numB = parseInt(b, 10);
+                  if (isNaN(numA) && isNaN(numB)) return 0;
+                  if (isNaN(numA)) return 1;
+                  if (isNaN(numB)) return -1;
+                  return numA - numB;
+                });
+              if (classNumbers.length > 0) {
+                produitsServicesText = `Classes: ${classNumbers.join(", ")}`;
+              }
+            } else if (typeof fieldValue === "object" && fieldValue !== null) {
+              // Process single object (fieldValue is Record<string, unknown>)
+              // Ensure classNumber is treated as potentially unknown before asserting type
+              const classNumProp = (fieldValue as { classNumber?: unknown })
+                .classNumber;
+              if (
+                typeof classNumProp === "string" &&
+                classNumProp.trim() !== ""
               ) {
-                if (niceClassesInput.classNumber) {
-                  produitsServicesText = `Classes: ${niceClassesInput.classNumber}`;
-                } // else produitsServicesText remains 'N/A'
-              } else if (
-                typeof niceClassesInput === "string" &&
-                niceClassesInput.trim() !== ""
-              ) {
-                // If it's a pre-formatted string, use it directly.
-                // This might happen if the API sometimes returns it differently.
-                produitsServicesText = niceClassesInput;
-              } else if (niceClassesInput) {
-                // Catch other non-null, non-array, non-object-with-classNumber cases
-                produitsServicesText = JSON.stringify(niceClassesInput);
-              } // else produitsServicesText remains 'N/A'
-            } catch (e) {
-              console.error("Error parsing Nice classes in search results:", e);
-              produitsServicesText = "Error parsing classes"; // More specific error
+                produitsServicesText = `Classes: ${classNumProp}`;
+              } else if (Object.keys(fieldValue).length > 0) {
+                // It's an object but not the one we expected for classNumber, or classNumber is empty
+                // Avoid stringifying empty objects like {}
+                produitsServicesText = JSON.stringify(fieldValue);
+              }
             }
-          } else if (niceClassField.value) {
-            produitsServicesText = niceClassField.value;
-          } else if (
+            // If none of the above conditions were met, produitsServicesText remains "N/A"
+          } catch (e) {
+            console.error("Error parsing Nice classes in search results:", e);
+            produitsServicesText = "Error parsing classes";
+          }
+
+          // Fallback for "values" if "value" parsing didn't yield a result (other than "N/A")
+          // or if fieldValue was undefined/null initially.
+          if (
+            produitsServicesText === "N/A" &&
             Array.isArray(niceClassField.values) &&
             niceClassField.values.length > 0
           ) {
@@ -217,9 +220,11 @@ async function searchTrademarks(query: string): Promise<Trademark[]> {
             pubDateField.values.length > 0
           ) {
             rawDateToFormat = pubDateField.values[0];
-          } else if (pubDateField && pubDateField.value) {
+          } else if (pubDateField && typeof pubDateField.value === "string") {
+            // Check if string
             rawDateToFormat = pubDateField.value;
           }
+          // If pubDateField.value is not a string, rawDateToFormat remains unchanged.
         }
 
         return {

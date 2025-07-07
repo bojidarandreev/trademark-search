@@ -104,6 +104,13 @@ interface TrademarkDetailData {
   // Add other known top-level properties of TradeMark object if they exist.
 }
 
+// Specific type for the GoodsServices node, to be used in renderNiceClasses
+interface GoodsServicesDataForRender {
+  ClassDescriptionDetails?: {
+    ClassDescription?: ClassDescription | ClassDescription[];
+  };
+}
+
 function formatDateDisplay(dateStr?: string): string {
   if (!dateStr) return "N/A";
   let year, month, day;
@@ -186,10 +193,27 @@ const renderPartyDetails = (
         if (typeof fn === "string") {
           displayName = fn;
         } else if (typeof fn === "object" && fn !== null) {
-          displayName = [fn.FirstName, fn.LastName]
-            .filter(Boolean)
-            .join(" ")
-            .trim();
+          // fn could be TextValue or FormattedName (object form)
+          if ("_text" in fn && typeof fn._text === "string") {
+            // Check if it's TextValue
+            displayName = fn._text;
+          } else {
+            // Assume it's FormattedName structure
+            const formattedName = fn as FormattedName; // Cast to FormattedName for easier access
+            const firstNamePart = formattedName.FirstName;
+            const lastNamePart = formattedName.LastName;
+
+            const fName =
+              typeof firstNamePart === "string"
+                ? firstNamePart
+                : (firstNamePart as TextValue)?._text;
+            const lName =
+              typeof lastNamePart === "string"
+                ? lastNamePart
+                : (lastNamePart as TextValue)?._text;
+
+            displayName = [fName, lName].filter(Boolean).join(" ").trim();
+          }
         }
       }
     }
@@ -312,20 +336,27 @@ export default function TrademarkDetailPage() {
   const noticeData = noticeWrapper?.TradeMark;
 
   const renderNiceClasses = (
-    goodsServicesContainer?: TrademarkDetailData["GoodsServicesDetails"]["GoodsServices"] // More specific type
+    goodsServicesContainer?: GoodsServicesDataForRender // Use the new specific type
   ) => {
     if (!goodsServicesContainer?.ClassDescriptionDetails?.ClassDescription) {
       return <p>N/A</p>;
     }
 
-    let classes: ClassDescription[] =
+    const classInput: ClassDescription | ClassDescription[] | undefined =
       goodsServicesContainer.ClassDescriptionDetails.ClassDescription;
-    if (!Array.isArray(classes)) classes = [classes];
+
+    let classes: ClassDescription[];
+    if (Array.isArray(classInput)) {
+      classes = classInput;
+    } else if (classInput) {
+      classes = [classInput];
+    } else {
+      classes = [];
+    }
 
     return (
       <ul className="list-disc list-inside space-y-2">
         {classes.map((cd: ClassDescription, index: number) => {
-          // Use ClassDescription type
           let descriptions: string[] = [];
           if (cd.GoodsServicesDescription) {
             const descArray = Array.isArray(cd.GoodsServicesDescription)

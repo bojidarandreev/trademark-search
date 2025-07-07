@@ -1,11 +1,14 @@
 "use client";
 
+export const dynamic = "force-dynamic"; // Tell Next.js to always render this page dynamically
+
 import {
   useState,
   KeyboardEvent,
   ChangeEvent,
   useEffect,
   useCallback,
+  Suspense, // Import Suspense
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search } from "lucide-react";
@@ -106,7 +109,12 @@ function findFieldValue(
       if (fieldName === "PublicationDate") return field.values[0];
       return field.values.join(", ");
     }
-    return field.value;
+    if (typeof field.value === "string") {
+      return field.value;
+    }
+    // If field.value is not a string (e.g., for complex fields),
+    // this helper should return undefined as it's for simple string extraction.
+    return undefined;
   }
   return undefined;
 }
@@ -208,15 +216,25 @@ async function searchTrademarksV2(
         (f) => f.name === "ClassNumber"
       );
       if (classNumberField) {
-        let classNumbers: string[] = [];
-        if (classNumberField.value) classNumbers = [classNumberField.value];
-        else if (
+        let classNumbersStrings: string[] = [];
+        if (
+          typeof classNumberField.value === "string" &&
+          classNumberField.value.trim() !== ""
+        ) {
+          classNumbersStrings = [classNumberField.value.trim()];
+        } else if (
           Array.isArray(classNumberField.values) &&
           classNumberField.values.length > 0
-        )
-          classNumbers = [...classNumberField.values];
-        if (classNumbers.length > 0) {
-          produitsServicesText = classNumbers
+        ) {
+          // Assuming classNumberField.values are already strings or need filtering/mapping
+          // For now, let's assume they are strings as per typical usage for simple values array
+          classNumbersStrings = classNumberField.values.filter(
+            (v) => typeof v === "string" && v.trim() !== ""
+          );
+        }
+
+        if (classNumbersStrings.length > 0) {
+          produitsServicesText = classNumbersStrings
             .map((cn) => parseInt(cn, 10))
             .filter((cn) => !isNaN(cn))
             .sort((a, b) => a - b)
@@ -235,8 +253,10 @@ async function searchTrademarksV2(
           pubDateField.values.length > 0
         )
           rawDateToFormat = pubDateField.values[0];
-        else if (pubDateField && pubDateField.value)
+        else if (pubDateField && typeof pubDateField.value === "string")
+          // Check if string
           rawDateToFormat = pubDateField.value;
+        // If pubDateField.value is not a string, rawDateToFormat remains unchanged.
       }
       return {
         marque: findFieldValue(fieldsArray, "Mark") || "N/A",
@@ -258,48 +278,24 @@ async function searchTrademarksV2(
   }
 }
 
-export default function TrademarkSearchV2TestPage() {
+// This new component will contain the actual page content and logic
+function V2TestPageContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams(); // searchParams hook is now inside the Suspense boundary
 
-  const [searchQuery, setSearchQuery] = useState(
-    () => searchParams.get("q") || ""
-  );
-  const [submittedQuery, setSubmittedQuery] = useState(
-    () => searchParams.get("q") || ""
-  );
-  const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>(
-    () => {
-      const niceParam = searchParams.get("niceClasses");
-      return niceParam
-        ? niceParam
-            .split(",")
-            .map(Number)
-            .filter((n) => !isNaN(n) && n > 0)
-        : [];
-    }
-  );
-  const [selectedOrigin, setSelectedOrigin] = useState<string | null>(() => {
-    const originParam = searchParams.get("origin");
-    return originParam && ["FR", "EU", "WO"].includes(originParam.toUpperCase())
-      ? originParam.toUpperCase()
-      : null;
-  });
-  const [niceClassLogic, setNiceClassLogic] = useState<"AND" | "OR">(() => {
-    const logicParam = searchParams.get("niceLogic");
-    return logicParam === "OR" || logicParam === "AND" ? logicParam : "AND";
-  });
+  // Initialize states to default values, will be set by useEffect
+  const [searchQuery, setSearchQuery] = useState("");
+  const [submittedQuery, setSubmittedQuery] = useState("");
+  const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>([]);
+  const [selectedOrigin, setSelectedOrigin] = useState<string | null>(null);
+  const [niceClassLogic, setNiceClassLogic] = useState<"AND" | "OR">("AND");
+  const [isMounted, setIsMounted] = useState(false); // Controls query execution
 
   useEffect(() => {
     const qParam = searchParams.get("q") || "";
     const niceClassesParam = searchParams.get("niceClasses");
     const originParam = searchParams.get("origin");
     const niceLogicParam = searchParams.get("niceLogic");
-
-    // ***** JULES DEBUG MARK 3 *****
-    console.log(
-      `[JULES_DEBUG_MARK_3] useEffect (searchParams change): q='${qParam}', niceClasses='${niceClassesParam}', origin='${originParam}', niceLogic='${niceLogicParam}'`
-    );
 
     setSearchQuery(qParam);
     setSubmittedQuery(qParam);
@@ -321,7 +317,8 @@ export default function TrademarkSearchV2TestPage() {
         ? niceLogicParam
         : "AND"
     );
-  }, [searchParams]); // Only depends on searchParams
+    setIsMounted(true); // Indicate that params have been processed and component can render fully
+  }, [searchParams]);
 
   const updateUrl = useCallback(
     (newStates: {
@@ -333,7 +330,6 @@ export default function TrademarkSearchV2TestPage() {
       const currentParamsFromHook = new URLSearchParams(
         searchParams.toString()
       );
-
       const finalQ =
         newStates.q !== undefined
           ? newStates.q
@@ -368,7 +364,6 @@ export default function TrademarkSearchV2TestPage() {
       const newPath = `/v2test${
         paramsToSet.toString() ? `?${paramsToSet.toString()}` : ""
       }`;
-
       if (
         typeof window !== "undefined" &&
         window.location.pathname + window.location.search !== newPath
@@ -394,12 +389,6 @@ export default function TrademarkSearchV2TestPage() {
       niceClassLogic,
     ],
     queryFn: () => {
-      // ***** JULES DEBUG MARK 4 *****
-      console.log(
-        `[JULES_DEBUG_MARK_4] useQuery queryFn using: submittedQuery='${submittedQuery}', sNC=[${selectedNiceClasses.join(
-          ","
-        )}] niceLogic='${niceClassLogic}', sOrigin='${selectedOrigin}'`
-      );
       return searchTrademarksV2(
         submittedQuery,
         selectedNiceClasses,
@@ -407,7 +396,7 @@ export default function TrademarkSearchV2TestPage() {
         niceClassLogic
       );
     },
-    enabled: !!submittedQuery,
+    enabled: !!submittedQuery && isMounted, // Enable query only when mounted and submittedQuery is present
     retry: 1,
   });
 
@@ -474,6 +463,28 @@ export default function TrademarkSearchV2TestPage() {
       }
     }
   };
+
+  // Conditional rendering based on isMounted to avoid using params-derived state before hydration
+  if (!isMounted) {
+    // Render a basic skeleton or loading state before client-side hydration and param processing
+    return (
+      <main className="container mx-auto p-4 max-w-4xl">
+        <h1 className="text-3xl font-bold mb-8 text-center">
+          Trademark Search (API V2 Test Page)
+        </h1>
+        <Skeleton className="h-10 w-full mb-6" /> {/* Input + Button */}
+        <Skeleton className="h-40 w-full mb-4" /> {/* Nice Class Filters */}
+        <Skeleton className="h-10 w-full mb-6" /> {/* Origin Filters */}
+        <ScrollArea className="h-[600px] rounded-md border p-4">
+          <div className="space-y-4">
+            {[...Array(3)].map((_, i) => (
+              <Skeleton key={`mount-skel-${i}`} className="h-32 w-full" />
+            ))}
+          </div>
+        </ScrollArea>
+      </main>
+    );
+  }
 
   return (
     <main className="container mx-auto p-4 max-w-4xl">
@@ -560,7 +571,10 @@ export default function TrademarkSearchV2TestPage() {
           onKeyDown={handleKeyDown}
           className="flex-1"
         />
-        <Button onClick={handleSearch} disabled={isLoading || isFetching}>
+        <Button
+          onClick={handleSearch}
+          disabled={isLoading || isFetching || !isMounted}
+        >
           <Search className="w-4 h-4 mr-2" />
           {isLoading || isFetching ? "Searching (V2)..." : "Search (V2)"}
         </Button>
@@ -653,5 +667,33 @@ export default function TrademarkSearchV2TestPage() {
         )}
       </ScrollArea>
     </main>
+  );
+}
+
+export default function TrademarkSearchV2TestPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="container mx-auto p-4 max-w-4xl">
+          <h1 className="text-3xl font-bold mb-8 text-center">
+            Trademark Search (API V2 Test Page)
+          </h1>
+          <Skeleton className="h-10 w-full mb-6" />{" "}
+          {/* Search Input + Button */}
+          <Skeleton className="h-40 w-full mb-4" />{" "}
+          {/* Nice Class Filters Area */}
+          <Skeleton className="h-10 w-full mb-6" /> {/* Origin Filters Area */}
+          <ScrollArea className="h-[600px] rounded-md border p-4">
+            <div className="space-y-4">
+              {[...Array(3)].map((_, i) => (
+                <Skeleton key={`fallback-skel-${i}`} className="h-32 w-full" />
+              ))}
+            </div>
+          </ScrollArea>
+        </main>
+      }
+    >
+      <V2TestPageContent />
+    </Suspense>
   );
 }

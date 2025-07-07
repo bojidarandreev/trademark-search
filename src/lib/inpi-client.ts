@@ -176,19 +176,48 @@ export async function getAccessToken(): Promise<string> {
       "Login POST to INPI_JSON_LOGIN_URL successful, status:",
       loginResponse.status
     );
-    if (!loginResponse.data || !loginResponse.data.access_token) {
-      throw new APIError("No access_token in response from /auth/login", 500, {
-        responseData: loginResponse.data,
-        stage: "token-extraction",
+
+    // Ensure access_token is a non-empty string and expires_in is handled as a number
+    const responseData = loginResponse.data as {
+      access_token?: unknown;
+      expires_in?: unknown;
+    };
+
+    if (
+      !responseData ||
+      typeof responseData.access_token !== "string" ||
+      !responseData.access_token
+    ) {
+      logError("getAccessTokenShared", {
+        message: "No valid access_token string in response from /auth/login",
+        responseData,
       });
+      throw new APIError(
+        "No valid access_token string in response from /auth/login",
+        500,
+        {
+          responseData,
+          stage: "token-extraction",
+        }
+      );
     }
-    accessToken = loginResponse.data.access_token; // Update module-level accessToken
-    tokenExpiry = Date.now() + (loginResponse.data.expires_in || 3600) * 1000; // Update module-level tokenExpiry
+    accessToken = responseData.access_token; // Now definitely a non-empty string
+
+    const expiresIn =
+      typeof responseData.expires_in === "number"
+        ? responseData.expires_in
+        : 3600;
+    tokenExpiry = Date.now() + expiresIn * 1000;
+
     console.log("Successfully obtained access_token.");
-    return accessToken;
+    return accessToken; // Guaranteed to be a string here
   } catch (error: unknown) {
-    logError("getAccessTokenShared", error);
+    // Ensure accessToken is nullified on any error before rethrowing or throwing new
     accessToken = null;
+    xsrfTokenValue = null;
+    tokenExpiry = null;
+    logError("getAccessTokenShared", error); // Log after nullifying
+    // accessToken = null; // Already done above
     xsrfTokenValue = null;
     tokenExpiry = null; // Reset on error
     if (error instanceof APIError) throw error;

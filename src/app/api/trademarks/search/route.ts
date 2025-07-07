@@ -26,11 +26,28 @@ interface SearchPayload {
   sortList: string[];
 }
 
+// Define interfaces for the API response structure (mirroring page.tsx and v2test/page.tsx)
+interface InpiField {
+  name: string;
+  value?: string | Record<string, unknown> | Array<Record<string, unknown>>;
+  values?: string[];
+}
+
+interface RawInpiResultItem {
+  fields: InpiField[];
+  xml?: { href?: string };
+}
+
+interface InpiSearchApiResponseData {
+  results: RawInpiResultItem[];
+  // Potentially other fields like total, page, etc.
+}
+
 async function performSearch(
   bearerToken: string,
   searchPayload: SearchPayload
-): Promise<AxiosResponse<unknown>> {
-  // Changed any to unknown
+): Promise<AxiosResponse<InpiSearchApiResponseData>> {
+  // Use specific type
   let currentSearchXsrfToken = getXsrfTokenValue();
   console.log(
     `Attempting preliminary GET to ${INPI_MARQUES_METADATA_URL} for search-specific XSRF token.`
