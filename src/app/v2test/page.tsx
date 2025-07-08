@@ -1,14 +1,11 @@
 "use client";
 
-export const dynamic = "force-dynamic"; // Tell Next.js to always render this page dynamically
-
 import {
   useState,
   KeyboardEvent,
   ChangeEvent,
   useEffect,
   useCallback,
-  Suspense, // Import Suspense
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search } from "lucide-react";
@@ -22,18 +19,6 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
-
-// Define interfaces for the raw data structure from the API (similar to page.tsx)
-interface InpiField {
-  name: string;
-  value?: string | Record<string, unknown> | Array<Record<string, unknown>>; // Changed any to unknown
-  values?: string[];
-}
-
-interface RawInpiResultItem {
-  fields: InpiField[];
-  xml?: { href?: string };
-}
 
 // Nice Classification Classes (Hardcoded)
 const niceClassesList = [
@@ -84,9 +69,7 @@ const niceClassesList = [
   { id: 45, title: "Class 45: Legal, security, personal services" },
 ];
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const _trademarkSchema = z.object({
-  // Prefixed with underscore
+const trademarkSchema = z.object({
   marque: z.string(),
   dateDepot: z.string(),
   produitsServices: z.string(),
@@ -96,10 +79,12 @@ const _trademarkSchema = z.object({
   applicationNumber: z.string().optional(),
 });
 
-type Trademark = z.infer<typeof _trademarkSchema>; // Use underscored name
+type Trademark = z.infer<typeof trademarkSchema>;
 
 function findFieldValue(
-  fields: InpiField[] | undefined, // Use InpiField type
+  fields:
+    | Array<{ name: string; value?: string; values?: string[] }>
+    | undefined,
   fieldName: string
 ): string | undefined {
   if (!Array.isArray(fields)) return undefined;
@@ -109,12 +94,7 @@ function findFieldValue(
       if (fieldName === "PublicationDate") return field.values[0];
       return field.values.join(", ");
     }
-    if (typeof field.value === "string") {
-      return field.value;
-    }
-    // If field.value is not a string (e.g., for complex fields),
-    // this helper should return undefined as it's for simple string extraction.
-    return undefined;
+    return field.value;
   }
   return undefined;
 }
@@ -144,7 +124,6 @@ async function searchTrademarksV2(
 
   if (niceClasses.length > 0) {
     params.append("niceClasses", niceClasses.join(","));
-    // Always send niceLogic if classes are present
     params.append("niceLogic", niceLogic);
   }
   if (origin) {
@@ -174,13 +153,10 @@ async function searchTrademarksV2(
         "Failed to fetch trademarks from backend V2 API"
     );
   }
-  // console.log("Frontend V2 Test Page: Raw data received from backend API:", JSON.stringify(rawData, null, 2)); // Optional: too verbose for now
+  // console.log("Frontend V2 Test Page: Raw data received from backend API:", JSON.stringify(rawData, null, 2));
   if (rawData && Array.isArray(rawData.results)) {
-    return rawData.results.map((item: RawInpiResultItem) => {
-      // Use RawInpiResultItem type
-      const fieldsArray: InpiField[] = Array.isArray(item.fields)
-        ? item.fields
-        : []; // Ensure fieldsArray is InpiField[]
+    return rawData.results.map((item: any) => {
+      const fieldsArray = Array.isArray(item.fields) ? item.fields : [];
       let origine = "N/A";
       const ukey = findFieldValue(fieldsArray, "ukey");
       if (ukey) {
@@ -216,25 +192,15 @@ async function searchTrademarksV2(
         (f) => f.name === "ClassNumber"
       );
       if (classNumberField) {
-        let classNumbersStrings: string[] = [];
-        if (
-          typeof classNumberField.value === "string" &&
-          classNumberField.value.trim() !== ""
-        ) {
-          classNumbersStrings = [classNumberField.value.trim()];
-        } else if (
+        let classNumbers: string[] = [];
+        if (classNumberField.value) classNumbers = [classNumberField.value];
+        else if (
           Array.isArray(classNumberField.values) &&
           classNumberField.values.length > 0
-        ) {
-          // Assuming classNumberField.values are already strings or need filtering/mapping
-          // For now, let's assume they are strings as per typical usage for simple values array
-          classNumbersStrings = classNumberField.values.filter(
-            (v) => typeof v === "string" && v.trim() !== ""
-          );
-        }
-
-        if (classNumbersStrings.length > 0) {
-          produitsServicesText = classNumbersStrings
+        )
+          classNumbers = [...classNumberField.values];
+        if (classNumbers.length > 0) {
+          produitsServicesText = classNumbers
             .map((cn) => parseInt(cn, 10))
             .filter((cn) => !isNaN(cn))
             .sort((a, b) => a - b)
@@ -253,10 +219,8 @@ async function searchTrademarksV2(
           pubDateField.values.length > 0
         )
           rawDateToFormat = pubDateField.values[0];
-        else if (pubDateField && typeof pubDateField.value === "string")
-          // Check if string
+        else if (pubDateField && pubDateField.value)
           rawDateToFormat = pubDateField.value;
-        // If pubDateField.value is not a string, rawDateToFormat remains unchanged.
       }
       return {
         marque: findFieldValue(fieldsArray, "Mark") || "N/A",
@@ -278,24 +242,48 @@ async function searchTrademarksV2(
   }
 }
 
-// This new component will contain the actual page content and logic
-function V2TestPageContent() {
+export default function TrademarkSearchV2TestPage() {
   const router = useRouter();
-  const searchParams = useSearchParams(); // searchParams hook is now inside the Suspense boundary
+  const searchParams = useSearchParams();
 
-  // Initialize states to default values, will be set by useEffect
-  const [searchQuery, setSearchQuery] = useState("");
-  const [submittedQuery, setSubmittedQuery] = useState("");
-  const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>([]);
-  const [selectedOrigin, setSelectedOrigin] = useState<string | null>(null);
-  const [niceClassLogic, setNiceClassLogic] = useState<"AND" | "OR">("AND");
-  const [isMounted, setIsMounted] = useState(false); // Controls query execution
+  const [searchQuery, setSearchQuery] = useState(
+    () => searchParams.get("q") || ""
+  );
+  const [submittedQuery, setSubmittedQuery] = useState(
+    () => searchParams.get("q") || ""
+  );
+  const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>(
+    () => {
+      const niceParam = searchParams.get("niceClasses");
+      return niceParam
+        ? niceParam
+            .split(",")
+            .map(Number)
+            .filter((n) => !isNaN(n) && n > 0)
+        : [];
+    }
+  );
+  const [selectedOrigin, setSelectedOrigin] = useState<string | null>(() => {
+    const originParam = searchParams.get("origin");
+    return originParam && ["FR", "EU", "WO"].includes(originParam.toUpperCase())
+      ? originParam.toUpperCase()
+      : null;
+  });
+  const [niceClassLogic, setNiceClassLogic] = useState<"AND" | "OR">(() => {
+    const logicParam = searchParams.get("niceLogic");
+    return logicParam === "OR" || logicParam === "AND" ? logicParam : "AND";
+  });
 
   useEffect(() => {
     const qParam = searchParams.get("q") || "";
     const niceClassesParam = searchParams.get("niceClasses");
     const originParam = searchParams.get("origin");
     const niceLogicParam = searchParams.get("niceLogic");
+
+    // ***** JULES DEBUG MARK 3 *****
+    console.log(
+      `[JULES_DEBUG_MARK_3] useEffect (searchParams change): q='${qParam}', niceClasses='${niceClassesParam}', origin='${originParam}', niceLogic='${niceLogicParam}'`
+    );
 
     setSearchQuery(qParam);
     setSubmittedQuery(qParam);
@@ -317,7 +305,6 @@ function V2TestPageContent() {
         ? niceLogicParam
         : "AND"
     );
-    setIsMounted(true); // Indicate that params have been processed and component can render fully
   }, [searchParams]);
 
   const updateUrl = useCallback(
@@ -330,6 +317,7 @@ function V2TestPageContent() {
       const currentParamsFromHook = new URLSearchParams(
         searchParams.toString()
       );
+
       const finalQ =
         newStates.q !== undefined
           ? newStates.q
@@ -364,6 +352,7 @@ function V2TestPageContent() {
       const newPath = `/v2test${
         paramsToSet.toString() ? `?${paramsToSet.toString()}` : ""
       }`;
+
       if (
         typeof window !== "undefined" &&
         window.location.pathname + window.location.search !== newPath
@@ -389,6 +378,12 @@ function V2TestPageContent() {
       niceClassLogic,
     ],
     queryFn: () => {
+      // ***** JULES DEBUG MARK 4 *****
+      console.log(
+        `[JULES_DEBUG_MARK_4] useQuery queryFn using: submittedQuery='${submittedQuery}', sNC=[${selectedNiceClasses.join(
+          ","
+        )}] niceLogic='${niceClassLogic}', sOrigin='${selectedOrigin}'`
+      );
       return searchTrademarksV2(
         submittedQuery,
         selectedNiceClasses,
@@ -396,8 +391,9 @@ function V2TestPageContent() {
         niceClassLogic
       );
     },
-    enabled: !!submittedQuery && isMounted, // Enable query only when mounted and submittedQuery is present
+    enabled: !!submittedQuery,
     retry: 1,
+    staleTime: 1000 * 60 * 60 * 1, // 1 hour
   });
 
   const handleNiceClassChange = (classId: number) => {
@@ -463,28 +459,6 @@ function V2TestPageContent() {
       }
     }
   };
-
-  // Conditional rendering based on isMounted to avoid using params-derived state before hydration
-  if (!isMounted) {
-    // Render a basic skeleton or loading state before client-side hydration and param processing
-    return (
-      <main className="container mx-auto p-4 max-w-4xl">
-        <h1 className="text-3xl font-bold mb-8 text-center">
-          Trademark Search (API V2 Test Page)
-        </h1>
-        <Skeleton className="h-10 w-full mb-6" /> {/* Input + Button */}
-        <Skeleton className="h-40 w-full mb-4" /> {/* Nice Class Filters */}
-        <Skeleton className="h-10 w-full mb-6" /> {/* Origin Filters */}
-        <ScrollArea className="h-[600px] rounded-md border p-4">
-          <div className="space-y-4">
-            {[...Array(3)].map((_, i) => (
-              <Skeleton key={`mount-skel-${i}`} className="h-32 w-full" />
-            ))}
-          </div>
-        </ScrollArea>
-      </main>
-    );
-  }
 
   return (
     <main className="container mx-auto p-4 max-w-4xl">
@@ -571,10 +545,7 @@ function V2TestPageContent() {
           onKeyDown={handleKeyDown}
           className="flex-1"
         />
-        <Button
-          onClick={handleSearch}
-          disabled={isLoading || isFetching || !isMounted}
-        >
+        <Button onClick={handleSearch} disabled={isLoading || isFetching}>
           <Search className="w-4 h-4 mr-2" />
           {isLoading || isFetching ? "Searching (V2)..." : "Search (V2)"}
         </Button>
@@ -590,7 +561,8 @@ function V2TestPageContent() {
         ) : error ? (
           <div className="text-red-500 text-center p-4">
             <p className="font-semibold">Error loading results (V2)</p>
-            <p className="text-sm mt-2">{error.message}</p>
+            <p className="text-sm mt-2">{(error as Error).message}</p>{" "}
+            {/* Cast error to Error type */}
             <Button
               variant="outline"
               className="mt-4"
@@ -657,8 +629,8 @@ function V2TestPageContent() {
           </div>
         ) : submittedQuery && !isLoading && !isFetching ? (
           <div className="text-center p-4 text-gray-500">
-            No results found for &quot;{submittedQuery}&quot; (V2 Test). Try a
-            different search term.
+            No results found for "{submittedQuery}" (V2 Test). Try a different
+            search term.
           </div>
         ) : (
           <div className="text-center p-4 text-gray-400">
@@ -667,33 +639,5 @@ function V2TestPageContent() {
         )}
       </ScrollArea>
     </main>
-  );
-}
-
-export default function TrademarkSearchV2TestPage() {
-  return (
-    <Suspense
-      fallback={
-        <main className="container mx-auto p-4 max-w-4xl">
-          <h1 className="text-3xl font-bold mb-8 text-center">
-            Trademark Search (API V2 Test Page)
-          </h1>
-          <Skeleton className="h-10 w-full mb-6" />{" "}
-          {/* Search Input + Button */}
-          <Skeleton className="h-40 w-full mb-4" />{" "}
-          {/* Nice Class Filters Area */}
-          <Skeleton className="h-10 w-full mb-6" /> {/* Origin Filters Area */}
-          <ScrollArea className="h-[600px] rounded-md border p-4">
-            <div className="space-y-4">
-              {[...Array(3)].map((_, i) => (
-                <Skeleton key={`fallback-skel-${i}`} className="h-32 w-full" />
-              ))}
-            </div>
-          </ScrollArea>
-        </main>
-      }
-    >
-      <V2TestPageContent />
-    </Suspense>
   );
 }
