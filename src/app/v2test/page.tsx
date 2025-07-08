@@ -86,7 +86,7 @@ const niceClassesList = [
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const _trademarkSchema = z.object({
-  // Prefixed with underscore
+  // Prefixed with underscore (ensuring this exact state)
   marque: z.string(),
   dateDepot: z.string(),
   produitsServices: z.string(),
