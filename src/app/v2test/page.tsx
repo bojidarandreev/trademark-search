@@ -308,8 +308,6 @@ function V2TestPageContent() {
     const qParam = searchParams.get("q") || "";
     const niceClassesParam = searchParams.get("niceClasses");
     const originParam = searchParams.get("origin");
-    const niceClassesParam = searchParams.get("niceClasses");
-    const originParam = searchParams.get("origin");
     const niceLogicParam = searchParams.get("niceLogic");
 
     // Update interactive states
