@@ -21,6 +21,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useQuery } from "@tanstack/react-query";
+// Removed debounce import
 import { z } from "zod";
 
 // Define interfaces for the raw data structure from the API (similar to page.tsx)
@@ -284,39 +285,64 @@ function V2TestPageContent() {
   const searchParams = useSearchParams(); // searchParams hook is now inside the Suspense boundary
 
   // Initialize states to default values, will be set by useEffect
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(""); // For the input field
+  const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>([]); // For interactive filter selection
+  const [selectedOrigin, setSelectedOrigin] = useState<string | null>(null); // For interactive filter selection
+  const [niceClassLogic, setNiceClassLogic] = useState<"AND" | "OR">("AND"); // For interactive filter selection
+
+  // New "active" states that will drive useQuery
+  const [activeSearchQuery, setActiveSearchQuery] = useState("");
+  const [activeNiceClasses, setActiveNiceClasses] = useState<number[]>([]);
+  const [activeSelectedOrigin, setActiveSelectedOrigin] = useState<
+    string | null
+  >(null);
+  const [activeNiceClassLogic, setActiveNiceClassLogic] = useState<
+    "AND" | "OR"
+  >("AND");
+
+  // This state is still useful to know if a search has been submitted, for UI messages
   const [submittedQuery, setSubmittedQuery] = useState("");
-  const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>([]);
-  const [selectedOrigin, setSelectedOrigin] = useState<string | null>(null);
-  const [niceClassLogic, setNiceClassLogic] = useState<"AND" | "OR">("AND");
   const [isMounted, setIsMounted] = useState(false); // Controls query execution
 
   useEffect(() => {
     const qParam = searchParams.get("q") || "";
     const niceClassesParam = searchParams.get("niceClasses");
     const originParam = searchParams.get("origin");
+    const niceClassesParam = searchParams.get("niceClasses");
+    const originParam = searchParams.get("origin");
     const niceLogicParam = searchParams.get("niceLogic");
 
+    // Update interactive states
     setSearchQuery(qParam);
-    setSubmittedQuery(qParam);
-    setSelectedNiceClasses(
-      niceClassesParam
-        ? niceClassesParam
-            .split(",")
-            .map(Number)
-            .filter((n) => !isNaN(n) && n > 0)
-        : []
-    );
-    setSelectedOrigin(
+    const initialNiceClasses = niceClassesParam
+      ? niceClassesParam
+          .split(",")
+          .map(Number)
+          .filter((n) => !isNaN(n) && n > 0)
+      : [];
+    setSelectedNiceClasses(initialNiceClasses);
+    const initialOrigin =
       originParam && ["FR", "EU", "WO"].includes(originParam.toUpperCase())
         ? originParam.toUpperCase()
-        : null
-    );
-    setNiceClassLogic(
+        : null;
+    setSelectedOrigin(initialOrigin);
+    const initialNiceLogic =
       niceLogicParam === "OR" || niceLogicParam === "AND"
         ? niceLogicParam
-        : "AND"
-    );
+        : "AND";
+    setNiceClassLogic(initialNiceLogic);
+
+    // Update "active" states for useQuery to use on initial load if params exist
+    setActiveSearchQuery(qParam);
+    setActiveNiceClasses(initialNiceClasses);
+    setActiveSelectedOrigin(initialOrigin);
+    setActiveNiceClassLogic(initialNiceLogic);
+
+    // Set submittedQuery if qParam exists, to control 'enabled' and UI messages
+    if (qParam) {
+      setSubmittedQuery(qParam);
+    }
+
     setIsMounted(true); // Indicate that params have been processed and component can render fully
   }, [searchParams]);
 
@@ -374,6 +400,8 @@ function V2TestPageContent() {
     [router, searchParams]
   );
 
+  // Removed debouncedUpdateUrlForQuery function and its useCallback
+
   const {
     data: trademarks,
     isLoading,
@@ -383,56 +411,67 @@ function V2TestPageContent() {
   } = useQuery<Trademark[], Error>({
     queryKey: [
       "trademarksV2Test",
-      submittedQuery,
-      selectedNiceClasses.join(","),
-      selectedOrigin,
-      niceClassLogic,
+      activeSearchQuery, // Use active state
+      activeNiceClasses.join(","), // Use active state
+      activeSelectedOrigin, // Use active state
+      activeNiceClassLogic, // Use active state
     ],
     queryFn: () => {
+      // Ensure queryFn uses the active states
       return searchTrademarksV2(
-        submittedQuery,
-        selectedNiceClasses,
-        selectedOrigin,
-        niceClassLogic
+        activeSearchQuery,
+        activeNiceClasses,
+        activeSelectedOrigin,
+        activeNiceClassLogic
       );
     },
-    enabled: !!submittedQuery && isMounted, // Enable query only when mounted and submittedQuery is present
+    // Enable query only when mounted and a search has been actively triggered (activeSearchQuery is set)
+    enabled: !!activeSearchQuery && isMounted,
     retry: 1,
+    staleTime: 1000 * 60 * 60 * 1, // 1 hour
   });
 
   const handleNiceClassChange = (classId: number) => {
     const newSelectedClasses = selectedNiceClasses.includes(classId)
       ? selectedNiceClasses.filter((id) => id !== classId)
       : [...selectedNiceClasses, classId];
-    updateUrl({
-      niceClasses: newSelectedClasses,
-      q: submittedQuery,
-      origin: selectedOrigin,
-      niceLogic: niceClassLogic,
-    });
+    setSelectedNiceClasses(newSelectedClasses);
+    // Do not call updateUrl here
   };
 
   const handleOriginChange = (value: string) => {
     const newOrigin = value === "ALL" ? null : value;
-    updateUrl({
-      origin: newOrigin,
-      q: submittedQuery,
-      niceClasses: selectedNiceClasses,
-      niceLogic: niceClassLogic,
-    });
+    setSelectedOrigin(newOrigin);
+    // Do not call updateUrl here
   };
 
   const handleNiceClassLogicChange = (value: "AND" | "OR") => {
-    updateUrl({
-      niceLogic: value,
-      q: submittedQuery,
-      niceClasses: selectedNiceClasses,
-      origin: selectedOrigin,
-    });
+    setNiceClassLogic(value);
+    // Do not call updateUrl here
   };
 
-  const handleSearch = () => {
+  // New function to handle applying all filters and search query
+  const applySearchAndFilters = () => {
     const trimmedQuery = searchQuery.trim();
+
+    // 1. Update "active" states to trigger useQuery with the latest selections
+    setActiveSearchQuery(trimmedQuery);
+    setActiveNiceClasses([...selectedNiceClasses]); // Ensure a new array reference for reactivity if needed
+    setActiveSelectedOrigin(selectedOrigin);
+    setActiveNiceClassLogic(niceClassLogic);
+
+    // 2. Update submittedQuery for UI messages (e.g., "No results for X")
+    //    Only set if there's an actual query, otherwise, it might show "No results for """
+    if (trimmedQuery) {
+      setSubmittedQuery(trimmedQuery);
+    } else {
+      // If the query is cleared and applied, we might want to clear submittedQuery
+      // or handle the "empty active query" state in the UI differently.
+      // For now, let's clear it if the input is empty.
+      setSubmittedQuery("");
+    }
+
+    // 3. Update the URL
     updateUrl({
       q: trimmedQuery,
       niceClasses: selectedNiceClasses,
@@ -441,13 +480,21 @@ function V2TestPageContent() {
     });
   };
 
+  const handleSearch = () => {
+    // Explicit search (button click or Enter key) now uses the central function
+    applySearchAndFilters();
+  };
+
   const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setSearchQuery(e.target.value);
+    const newQuery = e.target.value;
+    setSearchQuery(newQuery);
+    // Only update local state, do not call updateUrl or debounced version
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
+      // Explicit search (Enter key) should also update URL immediately
       handleSearch();
     }
   };
@@ -562,7 +609,7 @@ function V2TestPageContent() {
         </RadioGroup>
       </div>
 
-      <div className="flex gap-2 mb-6">
+      <div className="flex flex-col sm:flex-row gap-2 mb-6 items-center">
         <Input
           type="text"
           placeholder="Enter brand name..."
@@ -571,13 +618,24 @@ function V2TestPageContent() {
           onKeyDown={handleKeyDown}
           className="flex-1"
         />
-        <Button
-          onClick={handleSearch}
-          disabled={isLoading || isFetching || !isMounted}
-        >
-          <Search className="w-4 h-4 mr-2" />
-          {isLoading || isFetching ? "Searching (V2)..." : "Search (V2)"}
-        </Button>
+        <div className="flex gap-2 mt-2 sm:mt-0">
+          <Button
+            onClick={handleSearch}
+            disabled={isLoading || isFetching || !isMounted}
+            className="w-full sm:w-auto"
+          >
+            <Search className="w-4 h-4 mr-2" />
+            {isLoading || isFetching ? "Searching..." : "Search"}
+          </Button>
+          <Button
+            onClick={applySearchAndFilters}
+            disabled={isLoading || isFetching || !isMounted}
+            variant="outline" // Or another style you prefer
+            className="w-full sm:w-auto"
+          >
+            Apply Filters
+          </Button>
+        </div>
       </div>
 
       <ScrollArea className="h-[600px] rounded-md border p-4">
