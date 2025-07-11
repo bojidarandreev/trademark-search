@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import axios, { AxiosResponse } from "axios";
+import { getCacheService } from "@/lib/cache-service"; // Import the cache service
 import {
   client as apiClientV1, // Using existing client for cookie jar and auth logic
   getAccessToken,
@@ -197,8 +198,11 @@ export async function GET(request: Request) {
   console.log(
     "<<<<<< GET HANDLER - Backend Filtering Strategy (Confirmed V11 equivalent) >>>>>>"
   );
+  const cache = getCacheService(); // Get cache service instance
+  const requestUrl = request.url; // For stable cache key generation
+
   try {
-    const { searchParams } = new URL(request.url);
+    const { searchParams } = new URL(requestUrl);
     const queryFromUser = searchParams.get("q");
     const pageFromUser = searchParams.get("page") || "1";
     const nbResultsPerPageFromUser =
@@ -213,6 +217,28 @@ export async function GET(request: Request) {
     // Correctly parse niceLogicParam: default to 'AND'
     const niceLogicParam: "AND" | "OR" =
       niceLogicFromUrl?.toUpperCase() === "OR" ? "OR" : "AND";
+
+    // Construct a cache key from all relevant parameters
+    // Ensure consistent ordering and stringification for cache key stability
+    const cacheKeyParams = new URLSearchParams();
+    if (queryFromUser) cacheKeyParams.set("q", queryFromUser);
+    if (pageFromUser) cacheKeyParams.set("page", pageFromUser);
+    if (nbResultsPerPageFromUser) cacheKeyParams.set("nbResultsPerPage", nbResultsPerPageFromUser);
+    if (sortFieldFromUrl) cacheKeyParams.set("sort", sortFieldFromUrl);
+    if (orderFromUrl) cacheKeyParams.set("order", orderFromUrl);
+    if (niceClassesParam) cacheKeyParams.set("niceClasses", niceClassesParam);
+    if (originParam) cacheKeyParams.set("origin", originParam);
+    if (niceLogicFromUrl) cacheKeyParams.set("niceLogic", niceLogicFromUrl); // Use the original value from URL for cache key
+
+    const cacheKey = `searchV2:${cacheKeyParams.toString()}`;
+
+    const cachedData = cache.get<InpiSearchResponseData>(cacheKey);
+    if (cachedData) {
+      console.log(`[CACHE_SERVICE] Cache hit for key: ${cacheKey}`);
+      return NextResponse.json(cachedData);
+    }
+    console.log(`[CACHE_SERVICE] Cache miss for key: ${cacheKey}. Fetching from INPI.`);
+
 
     console.log(
       `GET HANDLER: Received niceLogicFromUrl: '${niceLogicFromUrl}', Parsed niceLogicParam: '${niceLogicParam}'`
@@ -399,6 +425,11 @@ export async function GET(request: Request) {
         // Ensure results is always an array, even if API returns something else or it's missing
         responseData = { ...responseData, results: [] };
       }
+
+      // Store successful response in cache before returning
+      // Use the default TTL from the cache service instance (e.g., 1 hour)
+      cache.set(cacheKey, responseData, undefined); // undefined uses stdTTL from NodeCache instance
+      console.log(`[CACHE_SERVICE] Data stored in cache for key: ${cacheKey}`);
 
       return NextResponse.json(responseData);
     } catch (error: unknown) {
