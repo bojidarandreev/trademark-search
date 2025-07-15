@@ -109,12 +109,10 @@ class InMemoryCacheService implements ICacheService {
   }
 
   get<T>(key: string): T | undefined {
-    this.ensureWeeklyFlush(); // Check before any cache operation
     return this.cache.get<T>(key);
   }
 
   set<T>(key: string, value: T, ttlSeconds?: number): void {
-    this.ensureWeeklyFlush(); // Check before any cache operation
     if (ttlSeconds !== undefined) {
       this.cache.set(key, value, ttlSeconds);
     } else {

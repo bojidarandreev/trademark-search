@@ -70,7 +70,7 @@ export function logError(context: string, error: unknown) {
 }
 
 // getAccessToken function, adapted to use exported state variables
-export async function getAccessToken(): Promise<string> {
+export const getAccessToken = async (): Promise<string> => {
   if (!process.env.INPI_USERNAME || !process.env.INPI_PASSWORD) {
     console.error(
       "INPI_USERNAME or INPI_PASSWORD environment variables are not set."
@@ -240,7 +240,7 @@ export async function getAccessToken(): Promise<string> {
       { errorDetails: String(error) }
     );
   }
-}
+};
 
 // Function to update the shared xsrfTokenValue, e.g., after metadata call
 export function updateXsrfTokenValue(newTokenValue: string | null) {
