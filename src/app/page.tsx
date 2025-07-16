@@ -426,8 +426,8 @@ function TrademarkSearchPageContent() {
     // Enable query only when mounted and a search has been actively triggered (activeSearchQuery is set)
     enabled: !!activeSearchQuery && isMounted,
     retry: 1,
-    staleTime: 1000 * 60 * 30, // 30 minutes
-    gcTime: 1000 * 60 * 60 * 24, // 24 hours
+    staleTime: 1000 * 60 * 30, // 30 minutes: Data fresher than this won't be refetched from server on mount/focus.
+    // gcTime is already handled by the PersistQueryClientProvider setup (defaults to 24 hours there)
   });
 
   const handleNiceClassChange = (classId: number) => {
