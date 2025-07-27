@@ -20,7 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 // Removed debounce import
 import { z } from "zod";
 
@@ -140,29 +140,37 @@ async function searchTrademarks(
     console.log("Frontend: Empty query, not fetching.");
     return [];
   }
-  const params = new URLSearchParams();
-  params.append("q", query);
 
-  if (niceClasses.length > 0) {
-    params.append("niceClasses", niceClasses.join(","));
-    // Always send niceLogic if classes are present
-    params.append("niceLogic", niceLogic);
-  }
-  if (origin) {
-    params.append("origin", origin);
-  }
+  const searchPayload = {
+    query: {
+      type: "brands",
+      selectedIds: [],
+      sort: "relevance",
+      order: "asc",
+      nbResultsPerPage: "20",
+      page: "1",
+      filter: {},
+      q: query,
+      advancedSearch: {},
+      displayStyle: "List",
+    },
+    aggregations: [
+      "markCurrentStatusCode",
+      "markFeature",
+      "registrationOfficeCode",
+      "classDescriptionDetails.class",
+    ],
+  };
 
-  // ***** JULES DEBUG MARK 1 *****
-  console.log(
-    `[JULES_DEBUG_MARK_1] searchTrademarks called with: query='${query}', niceClasses=[${niceClasses.join(
-      ","
-    )}] niceLogic='${niceLogic}', origin='${origin}'`
-  );
-  const finalParamsString = params.toString();
-  const apiUrl = `/api/trademarks/searchV2?${finalParamsString}`;
-  // ***** JULES DEBUG MARK 2 *****
-  console.log(`[JULES_DEBUG_MARK_2] Fetching final apiUrl: ${apiUrl}`);
-  const response = await fetch(apiUrl);
+  const apiUrl = `/api/trademarks/searchV2`;
+  const response = await fetch(apiUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(searchPayload),
+  });
+
   const rawData = await response.json();
   if (!response.ok) {
     console.error("Frontend: Search API call failed:", {
@@ -175,99 +183,28 @@ async function searchTrademarks(
         "Failed to fetch trademarks from backend V2 API"
     );
   }
-  // console.log("Frontend: Raw data received from backend API:", JSON.stringify(rawData, null, 2)); // Optional: too verbose for now
-  if (rawData && Array.isArray(rawData.results)) {
-    return rawData.results.map((item: RawInpiResultItem) => {
-      // Use RawInpiResultItem type
-      const fieldsArray: InpiField[] = Array.isArray(item.fields)
-        ? item.fields
-        : []; // Ensure fieldsArray is InpiField[]
-      let origine = "N/A";
-      const ukey = findFieldValue(fieldsArray, "ukey");
-      if (ukey) {
-        if (ukey.startsWith("FMARK")) origine = "FR";
-        else if (ukey.startsWith("CTMARK")) origine = "EU";
-        else if (ukey.startsWith("TMINT")) origine = "WO";
-      }
-      if (origine === "N/A") {
-        const appNumForOrigin = findFieldValue(
-          fieldsArray,
-          "ApplicationNumber"
-        );
-        if (appNumForOrigin) {
-          if (
-            appNumForOrigin.length > 2 &&
-            /^[A-Z]{2}/.test(appNumForOrigin.substring(0, 2))
-          ) {
-            const prefix = appNumForOrigin.substring(0, 2).toUpperCase();
-            if (prefix === "FR") origine = "FR";
-            else if (prefix === "EU" || prefix === "EM") origine = "EU";
-            else if (prefix === "WO") origine = "WO";
-          } else if (
-            appNumForOrigin.startsWith("0") &&
-            appNumForOrigin.length >= 8 &&
-            appNumForOrigin.length <= 9
-          ) {
-            origine = "EU";
-          }
-        }
-      }
-      let produitsServicesText = "N/A";
-      const classNumberField = fieldsArray.find(
-        (f) => f.name === "ClassNumber"
-      );
-      if (classNumberField) {
-        let classNumbersStrings: string[] = [];
-        if (
-          typeof classNumberField.value === "string" &&
-          classNumberField.value.trim() !== ""
-        ) {
-          classNumbersStrings = [classNumberField.value.trim()];
-        } else if (
-          Array.isArray(classNumberField.values) &&
-          classNumberField.values.length > 0
-        ) {
-          // Assuming classNumberField.values are already strings or need filtering/mapping
-          // For now, let's assume they are strings as per typical usage for simple values array
-          classNumbersStrings = classNumberField.values.filter(
-            (v) => typeof v === "string" && v.trim() !== ""
-          );
-        }
 
-        if (classNumbersStrings.length > 0) {
-          produitsServicesText = classNumbersStrings
-            .map((cn) => parseInt(cn, 10))
-            .filter((cn) => !isNaN(cn))
-            .sort((a, b) => a - b)
-            .map(String)
-            .join(", ");
-        }
+  if (rawData && rawData.result && Array.isArray(rawData.result.hits.hits)) {
+    return rawData.result.hits.hits.map((item: any) => {
+      const source = item._source;
+      let produitsServicesText = "N/A";
+      if (source.classDescriptionDetails) {
+        produitsServicesText = source.classDescriptionDetails
+          .map((c: any) => c.class)
+          .sort((a: number, b: number) => a - b)
+          .join(", ");
       }
-      let rawDateToFormat = findFieldValue(fieldsArray, "RegistrationDate");
-      if (!rawDateToFormat) {
-        const pubDateField = fieldsArray.find(
-          (f) => f.name === "PublicationDate"
-        );
-        if (
-          pubDateField &&
-          Array.isArray(pubDateField.values) &&
-          pubDateField.values.length > 0
-        )
-          rawDateToFormat = pubDateField.values[0];
-        else if (pubDateField && typeof pubDateField.value === "string")
-          // Check if string
-          rawDateToFormat = pubDateField.value;
-        // If pubDateField.value is not a string, rawDateToFormat remains unchanged.
-      }
+
       return {
-        marque: findFieldValue(fieldsArray, "Mark") || "N/A",
-        dateDepot: formatDateDisplay(rawDateToFormat),
+        marque: source.markWordElement || "N/A",
+        dateDepot: formatDateDisplay(source.applicationDate),
         produitsServices: produitsServicesText,
-        origine: origine,
-        statut: findFieldValue(fieldsArray, "MarkCurrentStatusCode") || "N/A",
-        noticeUrl: item.xml?.href,
-        applicationNumber:
-          findFieldValue(fieldsArray, "ApplicationNumber") || undefined,
+        origine: source.registrationOfficeCode || "N/A",
+        statut: source.markCurrentStatusCode || "N/A",
+        noticeUrl: source.markImageFileName
+          ? `/trademarkDetails/${source.applicationNumberWithCountryCode}`
+          : undefined,
+        applicationNumber: source.applicationNumberWithCountryCode || undefined,
       };
     });
   } else {
@@ -283,6 +220,7 @@ async function searchTrademarks(
 function TrademarkSearchPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams(); // searchParams hook is now inside the Suspense boundary
+  const queryClient = useQueryClient();
 
   // Initialize states to default values, will be set by useEffect
   const [searchQuery, setSearchQuery] = useState(""); // For the input field
@@ -290,19 +228,35 @@ function TrademarkSearchPageContent() {
   const [selectedOrigin, setSelectedOrigin] = useState<string | null>(null); // For interactive filter selection
   const [niceClassLogic, setNiceClassLogic] = useState<"AND" | "OR">("AND"); // For interactive filter selection
 
-  // New "active" states that will drive useQuery
-  const [activeSearchQuery, setActiveSearchQuery] = useState("");
-  const [activeNiceClasses, setActiveNiceClasses] = useState<number[]>([]);
-  const [activeSelectedOrigin, setActiveSelectedOrigin] = useState<
-    string | null
-  >(null);
-  const [activeNiceClassLogic, setActiveNiceClassLogic] = useState<
-    "AND" | "OR"
-  >("AND");
-
   // This state is still useful to know if a search has been submitted, for UI messages
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [isMounted, setIsMounted] = useState(false); // Controls query execution
+
+  const searchMutation = useMutation<
+    Trademark[],
+    Error,
+    {
+      query: string;
+      niceClasses: number[];
+      origin: string | null;
+      niceLogic: "AND" | "OR";
+    }
+  >({
+    mutationFn: ({ query, niceClasses, origin, niceLogic }) =>
+      searchTrademarks(query, niceClasses, origin, niceLogic),
+    onSuccess: (data) => {
+      queryClient.setQueryData(
+        [
+          "trademarks",
+          submittedQuery,
+          selectedNiceClasses.join(","),
+          selectedOrigin,
+          niceClassLogic,
+        ],
+        data
+      );
+    },
+  });
 
   useEffect(() => {
     const qParam = searchParams.get("q") || "";
@@ -330,19 +284,19 @@ function TrademarkSearchPageContent() {
         : "AND";
     setNiceClassLogic(initialNiceLogic);
 
-    // Update "active" states for useQuery to use on initial load if params exist
-    setActiveSearchQuery(qParam);
-    setActiveNiceClasses(initialNiceClasses);
-    setActiveSelectedOrigin(initialOrigin);
-    setActiveNiceClassLogic(initialNiceLogic);
-
     // Set submittedQuery if qParam exists, to control 'enabled' and UI messages
     if (qParam) {
       setSubmittedQuery(qParam);
+      searchMutation.mutate({
+        query: qParam,
+        niceClasses: initialNiceClasses,
+        origin: initialOrigin,
+        niceLogic: initialNiceLogic,
+      });
     }
 
     setIsMounted(true); // Indicate that params have been processed and component can render fully
-  }, [searchParams]);
+  }, [searchParams, queryClient]);
 
   const updateUrl = useCallback(
     (newStates: {
@@ -398,81 +352,33 @@ function TrademarkSearchPageContent() {
     [router, searchParams]
   );
 
-  // Removed debouncedUpdateUrlForQuery function and its useCallback
-
-  const {
-    data: trademarks,
-    isLoading,
-    error,
-    refetch,
-    isFetching,
-  } = useQuery<Trademark[], Error>({
-    queryKey: [
-      "trademarks",
-      activeSearchQuery, // Use active state
-      activeNiceClasses.join(","), // Use active state
-      activeSelectedOrigin, // Use active state
-      activeNiceClassLogic, // Use active state
-    ],
-    queryFn: () => {
-      // Ensure queryFn uses the active states
-      return searchTrademarks(
-        activeSearchQuery,
-        activeNiceClasses,
-        activeSelectedOrigin,
-        activeNiceClassLogic
-      );
-    },
-    // Enable query only when mounted and a search has been actively triggered (activeSearchQuery is set)
-    enabled: !!activeSearchQuery && isMounted,
-    retry: 1,
-    staleTime: 1000 * 60 * 30, // 30 minutes: Data fresher than this won't be refetched from server on mount/focus.
-    // gcTime is already handled by the PersistQueryClientProvider setup (defaults to 24 hours there)
-  });
-
   const handleNiceClassChange = (classId: number) => {
     const newSelectedClasses = selectedNiceClasses.includes(classId)
       ? selectedNiceClasses.filter((id) => id !== classId)
       : [...selectedNiceClasses, classId];
     setSelectedNiceClasses(newSelectedClasses);
-    // Do not call updateUrl here
   };
 
   const handleOriginChange = (value: string) => {
     const newOrigin = value === "ALL" ? null : value;
     setSelectedOrigin(newOrigin);
-    // Do not call updateUrl here
   };
 
   const handleNiceClassLogicChange = (value: "AND" | "OR") => {
     setNiceClassLogic(value);
-    // Do not call updateUrl here
   };
 
-  // New function to handle applying all filters and search query
   const applySearchAndFilters = () => {
     const trimmedQuery = searchQuery.trim();
-
-    // 1. Update "active" states to trigger useQuery with the latest selections
-    setActiveSearchQuery(trimmedQuery);
-    setActiveNiceClasses([...selectedNiceClasses]); // Ensure a new array reference for reactivity if needed
-    setActiveSelectedOrigin(selectedOrigin);
-    setActiveNiceClassLogic(niceClassLogic);
-
-    // 2. Update submittedQuery for UI messages (e.g., "No results for X")
-    //    Only set if there's an actual query, otherwise, it might show "No results for """
-    if (trimmedQuery) {
-      setSubmittedQuery(trimmedQuery);
-    } else {
-      // If the query is cleared and applied, we might want to clear submittedQuery
-      // or handle the "empty active query" state in the UI differently.
-      // For now, let's clear it if the input is empty.
-      setSubmittedQuery("");
-    }
-
-    // 3. Update the URL
+    setSubmittedQuery(trimmedQuery);
     updateUrl({
       q: trimmedQuery,
+      niceClasses: selectedNiceClasses,
+      origin: selectedOrigin,
+      niceLogic: niceClassLogic,
+    });
+    searchMutation.mutate({
+      query: trimmedQuery,
       niceClasses: selectedNiceClasses,
       origin: selectedOrigin,
       niceLogic: niceClassLogic,
@@ -480,20 +386,16 @@ function TrademarkSearchPageContent() {
   };
 
   const handleSearch = () => {
-    // Explicit search (button click or Enter key) now uses the central function
     applySearchAndFilters();
   };
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const newQuery = e.target.value;
-    setSearchQuery(newQuery);
-    // Only update local state, do not call updateUrl or debounced version
+    setSearchQuery(e.target.value);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      // Explicit search (Enter key) should also update URL immediately
       handleSearch();
     }
   };
@@ -510,17 +412,15 @@ function TrademarkSearchPageContent() {
     }
   };
 
-  // Conditional rendering based on isMounted to avoid using params-derived state before hydration
   if (!isMounted) {
-    // Render a basic skeleton or loading state before client-side hydration and param processing
     return (
       <main className="container mx-auto p-4 max-w-4xl">
         <h1 className="text-3xl font-bold mb-8 text-center">
           Trademark Search
         </h1>
-        <Skeleton className="h-10 w-full mb-6" /> {/* Input + Button */}
-        <Skeleton className="h-40 w-full mb-4" /> {/* Nice Class Filters */}
-        <Skeleton className="h-10 w-full mb-6" /> {/* Origin Filters */}
+        <Skeleton className="h-10 w-full mb-6" />
+        <Skeleton className="h-40 w-full mb-4" />
+        <Skeleton className="h-10 w-full mb-6" />
         <ScrollArea className="h-[600px] rounded-md border p-4">
           <div className="space-y-4">
             {[...Array(3)].map((_, i) => (
@@ -618,15 +518,15 @@ function TrademarkSearchPageContent() {
         <div className="flex gap-2 mt-2 sm:mt-0">
           <Button
             onClick={handleSearch}
-            disabled={isLoading || isFetching || !isMounted}
+            disabled={searchMutation.isPending || !isMounted}
             className="w-full sm:w-auto"
           >
             <Search className="w-4 h-4 mr-2" />
-            {isLoading || isFetching ? "Searching..." : "Search"}
+            {searchMutation.isPending ? "Searching..." : "Search"}
           </Button>
           <Button
             onClick={applySearchAndFilters}
-            disabled={isLoading || isFetching || !isMounted}
+            disabled={searchMutation.isPending || !isMounted}
             variant="outline" // Or another style you prefer
             className="w-full sm:w-auto"
           >
@@ -636,28 +536,35 @@ function TrademarkSearchPageContent() {
       </div>
 
       <ScrollArea className="h-[600px] rounded-md border p-4">
-        {(isLoading || isFetching) && submittedQuery ? (
+        {searchMutation.isPending ? (
           <div className="space-y-4">
             {[...Array(3)].map((_, i) => (
               <Skeleton key={i} className="h-32 w-full" />
             ))}
           </div>
-        ) : error ? (
+        ) : searchMutation.isError ? (
           <div className="text-red-500 text-center p-4">
             <p className="font-semibold">Error loading results</p>
-            <p className="text-sm mt-2">{error.message}</p>
+            <p className="text-sm mt-2">{searchMutation.error.message}</p>
             <Button
               variant="outline"
               className="mt-4"
-              onClick={() => refetch()}
-              disabled={isLoading || isFetching}
+              onClick={() =>
+                searchMutation.mutate({
+                  query: submittedQuery,
+                  niceClasses: selectedNiceClasses,
+                  origin: selectedOrigin,
+                  niceLogic: niceClassLogic,
+                })
+              }
+              disabled={searchMutation.isPending}
             >
               Try Again
             </Button>
           </div>
-        ) : trademarks && trademarks.length > 0 ? (
+        ) : searchMutation.isSuccess && searchMutation.data.length > 0 ? (
           <div className="space-y-4">
-            {trademarks.map((trademark: Trademark, index: number) => (
+            {searchMutation.data.map((trademark: Trademark, index: number) => (
               <Card
                 key={`${trademark.applicationNumber}-${index}-${trademark.marque}-v2test`}
                 className="p-4"
@@ -710,7 +617,7 @@ function TrademarkSearchPageContent() {
               </Card>
             ))}
           </div>
-        ) : submittedQuery && !isLoading && !isFetching ? (
+        ) : submittedQuery && !searchMutation.isPending ? (
           <div className="text-center p-4 text-gray-500">
             No results found for &quot;{submittedQuery}&quot;. Try a different
             search term.
