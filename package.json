@@ -29,7 +29,6 @@
     "clsx": "^2.1.1",
     "idb-keyval": "^6.2.2",
     "jest": "^30.0.4",
-    "jest-environment-jsdom": "^30.0.4",
     "lodash.debounce": "^4.0.8",
     "lucide-react": "^0.508.0",
     "next": "15.3.2",
@@ -53,6 +52,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "15.3.2",
+    "jest-environment-jsdom": "^30.0.5",
     "tailwindcss": "^4",
     "tw-animate-css": "^1.2.9",
     "typescript": "^5"

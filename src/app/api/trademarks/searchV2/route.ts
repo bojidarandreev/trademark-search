@@ -74,8 +74,8 @@ export async function POST(request: Request) {
     const { query, aggregations } = body;
     const {
       q,
-      page,
-      nbResultsPerPage,
+      page = 1,
+      nbResultsPerPage = 20,
       sort,
       order,
       niceClasses,
@@ -116,6 +116,28 @@ export async function POST(request: Request) {
 
     const token = await getAccessToken();
 
+    const niceClassesForBackendFilter = niceClasses
+      ? niceClasses
+          .split(",")
+          .map((nc: string) => parseInt(nc.trim(), 10))
+          .filter((nc: number) => !isNaN(nc) && nc > 0 && nc <= 45)
+      : [];
+    const niceLogicParam = niceLogic?.toUpperCase() === "OR" ? "OR" : "AND";
+    const originParam = origin;
+
+    const filter: any = {};
+    if (niceClassesForBackendFilter.length > 0) {
+      filter.niceClass = {
+        niceClasses: niceClassesForBackendFilter,
+        operator: niceLogicParam,
+      };
+    }
+    if (originParam) {
+      filter.registrationOfficeCode = {
+        registrationOfficeCodes: [originParam],
+      };
+    }
+
     const searchPayload = {
       query: {
         type: "brands",
@@ -124,7 +146,7 @@ export async function POST(request: Request) {
         order: order,
         nbResultsPerPage: nbResultsPerPage.toString(),
         page: page.toString(),
-        filter: {},
+        filter: filter,
         q: q,
         advancedSearch: {},
         displayStyle: "List",
@@ -137,78 +159,7 @@ export async function POST(request: Request) {
       JSON.stringify(searchPayload)
     );
 
-    let responseData = response.data;
-
-    const niceClassesForBackendFilter = niceClasses
-      ? niceClasses
-          .split(",")
-          .map((nc: string) => parseInt(nc.trim(), 10))
-          .filter((nc: number) => !isNaN(nc) && nc > 0 && nc <= 45)
-      : [];
-    const niceLogicParam = niceLogic?.toUpperCase() === "OR" ? "OR" : "AND";
-    const originParam = origin;
-
-    if (responseData && Array.isArray(responseData.result.hits.hits)) {
-      const initialCount = responseData.result.hits.hits.length;
-      const hasNiceClassFilter = niceClassesForBackendFilter.length > 0;
-      const hasOriginFilter =
-        originParam && ["FR", "EU", "WO"].includes(originParam.toUpperCase());
-
-      if (hasNiceClassFilter || hasOriginFilter) {
-        responseData.result.hits.hits = responseData.result.hits.hits.filter(
-          (item: any) => {
-            let matchesNiceClass = !hasNiceClassFilter;
-            if (hasNiceClassFilter) {
-              const classDescriptionDetails =
-                item._source.classDescriptionDetails;
-              if (classDescriptionDetails) {
-                const itemClassesRaw = classDescriptionDetails.map(
-                  (c: any) => c.class
-                );
-                const itemClassNumbers = itemClassesRaw
-                  .map((cn: any) => parseInt(cn, 10))
-                  .filter((cn: any) => !isNaN(cn));
-
-                if (niceLogicParam === "OR") {
-                  matchesNiceClass = niceClassesForBackendFilter.some(
-                    (selectedCn: number) =>
-                      itemClassNumbers.includes(selectedCn)
-                  );
-                } else {
-                  matchesNiceClass = niceClassesForBackendFilter.every(
-                    (selectedCn: number) =>
-                      itemClassNumbers.includes(selectedCn)
-                  );
-                }
-              } else {
-                matchesNiceClass = false;
-              }
-            }
-
-            let matchesOrigin = !hasOriginFilter;
-            if (hasOriginFilter) {
-              let derivedOrigin = "N/A";
-              const registrationOfficeCode =
-                item._source.registrationOfficeCode;
-              if (registrationOfficeCode) {
-                derivedOrigin = registrationOfficeCode;
-              }
-              matchesOrigin = derivedOrigin === originParam;
-            }
-            return matchesNiceClass && matchesOrigin;
-          }
-        );
-        console.log(
-          `POST HANDLER: Filtered ${initialCount} INPI results down to ${
-            responseData.result.hits.hits.length
-          }. Filters: Nice=[${niceClassesForBackendFilter.join(
-            ","
-          )}] (Logic: ${niceLogicParam}), Origin=[${originParam || "All"}]`
-        );
-      }
-    } else {
-      responseData = { ...responseData, result: { hits: { hits: [] } } };
-    }
+    const responseData = response.data;
 
     cache.set(cacheKey, responseData, undefined);
     console.log(`[CACHE_SERVICE] Data stored in cache for key: ${cacheKey}`);

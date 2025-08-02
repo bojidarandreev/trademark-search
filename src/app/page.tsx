@@ -8,8 +8,9 @@ import {
   ChangeEvent,
   useEffect,
   useCallback,
-  Suspense, // Import Suspense
+  Suspense,
 } from "react";
+import { useDebounce } from "use-debounce";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -141,18 +142,27 @@ async function searchTrademarks(
     return [];
   }
 
-  const searchPayload = {
+  // Construct the query parameters for the GET request
+  const params = new URLSearchParams();
+  params.set("q", query);
+  if (niceClasses.length > 0) {
+    params.set("niceClasses", niceClasses.join(","));
+    params.set("niceLogic", niceLogic);
+  }
+  if (origin) {
+    params.set("origin", origin);
+  }
+
+  // The search payload is now mostly managed by the backend,
+  // but we still need to send a POST request with the basic query info.
+  const searchPayload: any = {
     query: {
-      type: "brands",
-      selectedIds: [],
+      q: query,
+      origin: origin,
       sort: "relevance",
       order: "asc",
       nbResultsPerPage: "20",
       page: "1",
-      filter: {},
-      q: query,
-      advancedSearch: {},
-      displayStyle: "List",
     },
     aggregations: [
       "markCurrentStatusCode",
@@ -161,6 +171,11 @@ async function searchTrademarks(
       "classDescriptionDetails.class",
     ],
   };
+
+  if (niceClasses.length > 0) {
+    searchPayload.query.niceClasses = niceClasses.join(",");
+    searchPayload.query.niceLogic = niceLogic;
+  }
 
   const apiUrl = `/api/trademarks/searchV2`;
   const response = await fetch(apiUrl, {
@@ -183,7 +198,6 @@ async function searchTrademarks(
         "Failed to fetch trademarks from backend V2 API"
     );
   }
-
   if (rawData && rawData.result && Array.isArray(rawData.result.hits.hits)) {
     return rawData.result.hits.hits.map((item: any) => {
       const source = item._source;
@@ -194,7 +208,6 @@ async function searchTrademarks(
           .sort((a: number, b: number) => a - b)
           .join(", ");
       }
-
       return {
         marque: source.markWordElement || "N/A",
         dateDepot: formatDateDisplay(source.applicationDate),
@@ -208,8 +221,8 @@ async function searchTrademarks(
       };
     });
   } else {
-    console.error(
-      "Frontend: API response format error from backend: 'results' array not found or not an array",
+    console.warn(
+      "Frontend: API response format might be unexpected or empty.",
       rawData
     );
     return [];
@@ -223,13 +236,12 @@ function TrademarkSearchPageContent() {
   const queryClient = useQueryClient();
 
   // Initialize states to default values, will be set by useEffect
-  const [searchQuery, setSearchQuery] = useState(""); // For the input field
-  const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>([]); // For interactive filter selection
-  const [selectedOrigin, setSelectedOrigin] = useState<string | null>(null); // For interactive filter selection
-  const [niceClassLogic, setNiceClassLogic] = useState<"AND" | "OR">("AND"); // For interactive filter selection
-
-  // This state is still useful to know if a search has been submitted, for UI messages
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedNiceClasses, setSelectedNiceClasses] = useState<number[]>([]);
+  const [selectedOrigin, setSelectedOrigin] = useState<string | null>(null);
+  const [niceClassLogic, setNiceClassLogic] = useState<"AND" | "OR">("AND");
   const [submittedQuery, setSubmittedQuery] = useState("");
+  const [debouncedSearchQuery] = useDebounce(searchQuery, 500);
   const [isMounted, setIsMounted] = useState(false); // Controls query execution
 
   const searchMutation = useMutation<
@@ -264,7 +276,6 @@ function TrademarkSearchPageContent() {
     const originParam = searchParams.get("origin");
     const niceLogicParam = searchParams.get("niceLogic");
 
-    // Update interactive states
     setSearchQuery(qParam);
     const initialNiceClasses = niceClassesParam
       ? niceClassesParam
@@ -284,19 +295,38 @@ function TrademarkSearchPageContent() {
         : "AND";
     setNiceClassLogic(initialNiceLogic);
 
-    // Set submittedQuery if qParam exists, to control 'enabled' and UI messages
     if (qParam) {
       setSubmittedQuery(qParam);
-      searchMutation.mutate({
-        query: qParam,
-        niceClasses: initialNiceClasses,
-        origin: initialOrigin,
-        niceLogic: initialNiceLogic,
-      });
     }
+    setIsMounted(true);
+  }, []); // Run only once on mount
 
-    setIsMounted(true); // Indicate that params have been processed and component can render fully
-  }, [searchParams, queryClient]);
+  useEffect(() => {
+    if (isMounted) {
+      const trimmedQuery = debouncedSearchQuery.trim();
+      if (trimmedQuery) {
+        setSubmittedQuery(trimmedQuery);
+        updateUrl({
+          q: trimmedQuery,
+          niceClasses: selectedNiceClasses,
+          origin: selectedOrigin,
+          niceLogic: niceClassLogic,
+        });
+        searchMutation.mutate({
+          query: trimmedQuery,
+          niceClasses: selectedNiceClasses,
+          origin: selectedOrigin,
+          niceLogic: niceClassLogic,
+        });
+      }
+    }
+  }, [
+    debouncedSearchQuery,
+    selectedNiceClasses,
+    selectedOrigin,
+    niceClassLogic,
+    isMounted,
+  ]);
 
   const updateUrl = useCallback(
     (newStates: {
