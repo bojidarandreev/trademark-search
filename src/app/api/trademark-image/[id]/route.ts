@@ -77,6 +77,17 @@ export async function GET(
       );
     }
     if (axios.isAxiosError(error)) {
+      if (error.response?.status === 500) {
+        return NextResponse.json(
+          {
+            error: "Image not available for the given trademark ID.",
+            code: 500,
+            details: `The trademark ID "${id}" does not seem to correspond to a valid image.`,
+            timestamp: new Date().toISOString(),
+          },
+          { status: 500 }
+        );
+      }
       // Log the actual error response from INPI if available
       console.error(
         "Axios error details:",

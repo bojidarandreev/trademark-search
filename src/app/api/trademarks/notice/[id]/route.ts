@@ -95,6 +95,17 @@ export async function GET(
       );
     }
     if (axios.isAxiosError(error)) {
+      if (error.response?.status === 404) {
+        return NextResponse.json(
+          {
+            error: "Notice not found for the given trademark ID.",
+            code: 404,
+            details: `The trademark ID "${id}" does not seem to correspond to a valid notice.`,
+            timestamp: new Date().toISOString(),
+          },
+          { status: 404 }
+        );
+      }
       return NextResponse.json(
         {
           error: `Failed to fetch notice: ${

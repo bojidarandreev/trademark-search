@@ -1,44 +1,21 @@
 import { NextResponse } from "next/server";
 import axios, { AxiosResponse } from "axios";
-import { getCacheService } from "@/lib/cache-service"; // Import the cache service
+import { getCacheService } from "@/lib/cache-service";
 import {
-  client as apiClientV1, // Using existing client for cookie jar and auth logic
+  client as apiClientV1,
   getAccessToken,
   APIError,
   logError,
-  getXsrfTokenValue,
-  updateXsrfTokenValue,
-  // clearAuthCache, // Unused
 } from "@/lib/inpi-client";
 
 const INPI_API_BASE_URL = "https://data.inpi.fr";
-const ACTUAL_MARQUES_METADATA_ENDPOINT = `${INPI_API_BASE_URL}/api/marques/metadata`;
-const ACTUAL_MARQUES_SEARCH_ENDPOINT = `${INPI_API_BASE_URL}/search`;
-
-// Define interfaces based on usage in this file and the previous one
-interface SearchPayload {
-  query: string;
-  position: number;
-  size: number;
-  collections: string[];
-  fields: string[];
-  sortList: string[];
-}
-
-interface InpiField {
-  name: string;
-  value?: string;
-  values?: string[];
-}
-
-interface InpiResultItem {
-  fields: InpiField[];
-  // Define other known properties of a result item if available
-}
 
 interface InpiSearchResponseData {
-  results: InpiResultItem[];
-  // Define other known properties of the response data, e.g., total, page, etc.
+  result?: {
+    hits?: {
+      hits?: any[];
+    };
+  };
 }
 
 const clientV2 = axios.create({
@@ -48,16 +25,16 @@ const clientV2 = axios.create({
 });
 
 async function performSearchV2(
-  bearerToken: string,
   searchPayload: any
 ): Promise<AxiosResponse<InpiSearchResponseData>> {
-  console.log("<<<<<< performSearchV2 - Bila Hotfix >>>>>>");
+  const token = await getAccessToken(); // Get the token
 
   const requestHeaders: Record<string, string> = {
     "Content-Type": "text/plain;charset=UTF-8",
     Accept: "*/*",
     "User-Agent":
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+    Authorization: `Bearer ${token}`, // Use the token in the header
   };
 
   return clientV2.post("/search", searchPayload, {
@@ -66,16 +43,15 @@ async function performSearchV2(
 }
 
 export async function POST(request: Request) {
-  console.log("<<<<<< POST HANDLER - Bila Hotfix >>>>>>");
-  const cache = getCacheService(); // Get cache service instance
+  const cache = getCacheService();
 
   try {
     const body = await request.json();
     const { query, aggregations } = body;
     const {
       q,
-      page = 1,
-      nbResultsPerPage = 20,
+      page,
+      nbResultsPerPage,
       sort,
       order,
       niceClasses,
@@ -83,18 +59,16 @@ export async function POST(request: Request) {
       niceLogic,
     } = query;
 
-    // Construct a cache key from all relevant parameters
-    // Ensure consistent ordering and stringification for cache key stability
     const cacheKeyParams = new URLSearchParams();
     if (q) cacheKeyParams.set("q", q);
-    if (page) cacheKeyParams.set("page", page);
+    if (page) cacheKeyParams.set("page", page.toString());
     if (nbResultsPerPage)
-      cacheKeyParams.set("nbResultsPerPage", nbResultsPerPage);
+      cacheKeyParams.set("nbResultsPerPage", nbResultsPerPage.toString());
     if (sort) cacheKeyParams.set("sort", sort);
     if (order) cacheKeyParams.set("order", order);
     if (niceClasses) cacheKeyParams.set("niceClasses", niceClasses);
     if (origin) cacheKeyParams.set("origin", origin);
-    if (niceLogic) cacheKeyParams.set("niceLogic", niceLogic); // Use the original value from URL for cache key
+    if (niceLogic) cacheKeyParams.set("niceLogic", niceLogic);
 
     const cacheKey = `searchV2:${cacheKeyParams.toString()}`;
 
@@ -114,7 +88,25 @@ export async function POST(request: Request) {
       );
     }
 
-    const token = await getAccessToken();
+    const searchPayload = {
+      query: {
+        type: "brands",
+        selectedIds: [],
+        sort: sort,
+        order: order,
+        nbResultsPerPage: nbResultsPerPage.toString(),
+        page: page.toString(),
+        filter: {},
+        q: q,
+        advancedSearch: {},
+        displayStyle: "List",
+      },
+      aggregations: aggregations,
+    };
+
+    const response = await performSearchV2(JSON.stringify(searchPayload));
+
+    let responseData = response.data;
 
     const niceClassesForBackendFilter = niceClasses
       ? niceClasses
@@ -125,41 +117,60 @@ export async function POST(request: Request) {
     const niceLogicParam = niceLogic?.toUpperCase() === "OR" ? "OR" : "AND";
     const originParam = origin;
 
-    const filter: any = {};
-    if (niceClassesForBackendFilter.length > 0) {
-      filter.niceClass = {
-        niceClasses: niceClassesForBackendFilter,
-        operator: niceLogicParam,
-      };
+    if (
+      responseData?.result?.hits?.hits &&
+      Array.isArray(responseData.result.hits.hits)
+    ) {
+      const hasNiceClassFilter = niceClassesForBackendFilter.length > 0;
+      const hasOriginFilter =
+        originParam && ["FR", "EU", "WO"].includes(originParam.toUpperCase());
+
+      if (hasNiceClassFilter || hasOriginFilter) {
+        responseData.result.hits.hits = responseData.result.hits.hits.filter(
+          (item: any) => {
+            let matchesNiceClass = !hasNiceClassFilter;
+            if (hasNiceClassFilter) {
+              const classDescriptionDetails =
+                item._source.classDescriptionDetails;
+              if (classDescriptionDetails) {
+                const itemClassesRaw = classDescriptionDetails.map(
+                  (c: any) => c.class
+                );
+                const itemClassNumbers = itemClassesRaw
+                  .map((cn: any) => parseInt(cn, 10))
+                  .filter((cn: any) => !isNaN(cn));
+
+                if (niceLogicParam === "OR") {
+                  matchesNiceClass = niceClassesForBackendFilter.some(
+                    (selectedCn: number) =>
+                      itemClassNumbers.includes(selectedCn)
+                  );
+                } else {
+                  matchesNiceClass = niceClassesForBackendFilter.every(
+                    (selectedCn: number) =>
+                      itemClassNumbers.includes(selectedCn)
+                  );
+                }
+              } else {
+                matchesNiceClass = false;
+              }
+            }
+
+            let matchesOrigin = !hasOriginFilter;
+            if (hasOriginFilter) {
+              let derivedOrigin = "N/A";
+              const registrationOfficeCode =
+                item._source.registrationOfficeCode;
+              if (registrationOfficeCode) {
+                derivedOrigin = registrationOfficeCode;
+              }
+              matchesOrigin = derivedOrigin === originParam;
+            }
+            return matchesNiceClass && matchesOrigin;
+          }
+        );
+      }
     }
-    if (originParam) {
-      filter.registrationOfficeCode = {
-        registrationOfficeCodes: [originParam],
-      };
-    }
-
-    const searchPayload = {
-      query: {
-        type: "brands",
-        selectedIds: [],
-        sort: sort,
-        order: order,
-        nbResultsPerPage: nbResultsPerPage.toString(),
-        page: page.toString(),
-        filter: filter,
-        q: q,
-        advancedSearch: {},
-        displayStyle: "List",
-      },
-      aggregations: aggregations,
-    };
-
-    const response = await performSearchV2(
-      token,
-      JSON.stringify(searchPayload)
-    );
-
-    const responseData = response.data;
 
     cache.set(cacheKey, responseData, undefined);
     console.log(`[CACHE_SERVICE] Data stored in cache for key: ${cacheKey}`);
@@ -178,7 +189,6 @@ export async function POST(request: Request) {
         { status: error.statusCode }
       );
     }
-    console.log("error in post", error);
     return NextResponse.json(
       {
         error: "An unexpected internal error occurred in POST handler.",

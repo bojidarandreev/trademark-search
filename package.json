@@ -39,6 +39,7 @@
     "tailwind-merge": "^3.2.0",
     "tough-cookie": "^5.1.2",
     "ts-jest": "^29.4.0",
+    "use-debounce": "^10.0.5",
     "whatwg-fetch": "^3.6.20",
     "xml2js": "^0.6.2",
     "zod": "^3.24.4"
